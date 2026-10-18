@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mmp-sense"
+version = "0.1.0"
+description = "Explore sensor signals: look at them, measure them, turn what you see into a detector"
+readme = "README.md"
+license = "MIT"
+authors = [{name = "Michal Piekos"}]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.1",
+    "mcap>=1.2,<2",
+]
+
+[project.optional-dependencies]
+gui = [
+    "PySide6>=6.6",
+    "pyqtgraph>=0.13.7",
+    "qtconsole>=5.5",
+    "ipykernel>=6.29",
+]
+mcp = ["mcp>=2,<3"]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+mmp-sense = "mmp_sense.ui.app:main"
+mmp-sense-mcp = "mmp_sense.mcp.server:main"
+mmp-sense-send = "mmp_sense_send:main"
+
+[tool.setuptools.packages.find]
+include = ["mmp_sense*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # ipykernel's in-process kernel warns about its own coroutines.
+    "ignore:For consistency across implementations:PendingDeprecationWarning",
+]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

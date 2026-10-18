@@ -1,0 +1,20 @@
+# Python environment and build output
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Local recordings: data, not source
+/recordings/
+
+# Editor and tool droppings
+.cache/
+*~
+.*.swp
+
+# Local agent instructions
+/AGENTS.md
+/CLAUDE.md
