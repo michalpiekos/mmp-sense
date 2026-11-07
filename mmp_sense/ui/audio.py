@@ -1,11 +1,10 @@
-"""Sound out of the speakers: what the window's Listen button plays through.
+"""Sound out of the speakers: what the window's Play button sounds through.
 
 A `Player` takes float samples within -1..1 and plays them once, at
 the output device's own rate and channel count -- 16-bit where the
 device takes it, else floats -- the same sound in every channel. A
 machine without a sound device, or a Qt without its multimedia module,
-gets a player that says it cannot play, and the window disables Listen
-rather than failing.
+gets a player that says it cannot play, and Play runs silently.
 """
 
 from __future__ import annotations

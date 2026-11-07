@@ -233,21 +233,22 @@ def test_a_log_axis_puts_strips_at_log_edges_and_keeps_zero(ui, session):
     assert session.band("band 1").range == pytest.approx((0.0, 10 ** 1.5))
 
 
-def test_listen_plays_only_the_ticked_bands(ui, session):
+def test_play_sounds_only_the_ticked_bands(ui, session):
     window, speaker = ui
-    window.toggle_sound()
+    window.amp.setCurrentText("amp off")
+    window.toggle_play()
     whole = speaker.played[-1]
-    window.toggle_sound()
+    window.toggle_play()
     session.add_band(10, 20)
     session.add_band(30, 40, on=False)
-    window.toggle_sound()
+    window.toggle_play()
     banded = speaker.played[-1]
     assert len(banded) == len(whole) and not np.allclose(banded, whole)
     assert np.abs(banded).max() == pytest.approx(0.9, abs=0.02)
     assert "1 band" in window.statusBar().currentMessage()
-    window.toggle_sound()
+    window.toggle_play()
     session.set_band_on("band 1", False)
-    window.toggle_sound()
+    window.toggle_play()
     assert np.allclose(speaker.played[-1], whole)
 
 
@@ -267,6 +268,6 @@ def test_bands_past_what_the_signal_holds_are_said_not_played(ui, session):
     window, speaker = ui
     name, top = window.nyquist()
     session.add_band(top + 1, top + 10)
-    window.toggle_sound()
+    window.toggle_play()
     assert speaker.played == [] and window.hearing is None
     assert "holds nothing above" in window.statusBar().currentMessage()

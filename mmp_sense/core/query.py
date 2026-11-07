@@ -15,13 +15,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from scipy import fft as sfft
+from scipy.ndimage import maximum_filter1d, uniform_filter1d
 from scipy.signal import resample_poly, welch
 
 from .. import dsp
 from .data import Spectrogram, Spectrum
 
 __all__ = ["finite", "stretch", "summarise", "distribution", "spectrum_of",
-           "spectrogram_of", "shape_of", "spectrum_table", "as_audio", "FADE_S",
+           "spectrogram_of", "shape_of", "spectrum_table", "as_audio", "fade_in", "FADE_S",
            "band_only", "BAND_EDGE",
            "paired", "SyncEstimate", "fit_sync", "NoOverlap", "psd_table", "at_times"]
 
@@ -30,6 +31,16 @@ FADE_S = 0.005
 #: A band's gain falls from 1 to 0 over this share of its width outside
 #: it (at least one bin): a hard edge would ring.
 BAND_EDGE = 0.02
+#: Amplified sound never passes this.
+LIMIT = 0.9
+#: How far around a loud moment the limiter turns the gain down, seconds.
+LIMITER_S = 0.05
+#: What "auto" raises the louder moments to, and the most it will raise them.
+AUTO_LEVEL_DB = -20.0
+AMP_MAX_DB = 60.0
+#: The louder moments: this percentile of the loudness of frames this long.
+LEVEL_FRAME_S = 0.05
+LEVEL_PERCENTILE = 95.0
 
 
 def finite(value) -> float | None:
@@ -224,8 +235,48 @@ def band_only(values, rate: float, bands) -> np.ndarray:
     return out
 
 
+def _loud_moments(sound: np.ndarray, rate: int) -> float:
+    """The RMS of the louder moments: louder than a mean of mostly quiet,
+    and unmoved by one knock as a peak would be."""
+    frame = max(1, int(LEVEL_FRAME_S * rate))
+    frames = sound[:len(sound) // frame * frame].reshape(-1, frame)
+    power = np.mean(frames ** 2, axis=1) if len(frames) else np.mean(sound ** 2, keepdims=True)
+    power = power[power > 0]
+    return float(np.sqrt(np.percentile(power, LEVEL_PERCENTILE))) if len(power) else 0.0
+
+
+def _limited(sound: np.ndarray, rate: int) -> np.ndarray:
+    """`sound` turned down around whatever passes LIMIT.
+
+    The smoothing is no wider than the peak search, so every sample's
+    gain is low enough for the loudest sample near it.
+    """
+    width = max(1, int(LIMITER_S * rate)) | 1
+    envelope = maximum_filter1d(np.abs(sound), width, mode="nearest")
+    gain = np.minimum(1.0, LIMIT / np.maximum(envelope, LIMIT))
+    return sound * uniform_filter1d(gain, width, mode="nearest")
+
+
+def amplified(sound: np.ndarray, rate: int, amp) -> np.ndarray:
+    """`sound` raised by `amp` dB, or for "auto" to AUTO_LEVEL_DB, never past LIMIT."""
+    if amp == "auto":
+        level = _loud_moments(sound, rate)
+        if level == 0:
+            return sound
+        db = min(AUTO_LEVEL_DB - 20.0 * math.log10(level), AMP_MAX_DB)
+        amp = max(db, 0.0)
+    return _limited(sound * 10.0 ** (float(amp) / 20.0), rate)
+
+
+def check_amp(amp) -> None:
+    if amp is None or amp == "auto":
+        return
+    if isinstance(amp, bool) or not isinstance(amp, (int, float)) or not 0 <= amp <= AMP_MAX_DB:
+        raise ValueError(f'amp is None, "auto", or 0 to {AMP_MAX_DB:g} dB, not {amp!r}')
+
+
 def as_audio(values: np.ndarray, rate: float, out_rate: int, *,
-             speed: float = 1.0, bands=None) -> np.ndarray:
+             speed: float = 1.0, bands=None, amp=None) -> np.ndarray:
     """Samples of one signal at `rate` as sound at `out_rate`: float32
     within -1..1, `speed` times as fast (and as high).
 
@@ -233,8 +284,10 @@ def as_audio(values: np.ndarray, rate: float, out_rate: int, *,
     within -1..1 are kept; larger ones lose their mean and peak at 0.9.
     A gap (NaN) is silence. Given `bands`, (low, high) Hz pairs, only
     those frequencies are kept and the result peaks at 0.9, so a quiet
-    band can be heard.
+    band can be heard. Given `amp`, dB or "auto", the mean goes and the
+    sound is raised instead, held under 0.9 by a limiter.
     """
+    check_amp(amp)
     values = np.asarray(values)
     if rate <= 0:
         raise ValueError("playing a signal needs its sample rate")
@@ -256,13 +309,19 @@ def as_audio(values: np.ndarray, rate: float, out_rate: int, *,
         sound = band_only(np.where(np.isinf(sound), np.nan, sound), rate, bands)
         finite = np.isfinite(sound)
         peak = float(np.abs(sound[finite]).max()) if finite.any() else 0.0
-        sound = sound * (0.9 / peak) if peak > 0 else sound
+        if amp is None:
+            sound = sound * (0.9 / peak) if peak > 0 else sound
+    if amp is not None:
+        finite = np.isfinite(sound)
+        sound = sound - sound[finite].mean() if finite.any() else sound
     sound = np.nan_to_num(sound, nan=0.0, posinf=0.0, neginf=0.0)
     if not len(sound):
         return np.zeros(0, dtype=np.float32)
     ratio = Fraction(float(out_rate) / (float(rate) * float(speed))).limit_denominator(1000)
     if ratio != 1:
         sound = resample_poly(sound, ratio.numerator, ratio.denominator)
+    if amp is not None:
+        sound = amplified(sound, out_rate, amp)
     sound = np.clip(sound, -1.0, 1.0)
     fade = min(len(sound) // 2, int(FADE_S * out_rate))
     if fade:
@@ -270,6 +329,14 @@ def as_audio(values: np.ndarray, rate: float, out_rate: int, *,
         sound[:fade] *= ramp
         sound[len(sound) - fade:] *= ramp[::-1]
     return sound.astype(np.float32)
+
+
+def fade_in(sound: np.ndarray, rate: int) -> np.ndarray:
+    """A copy of `sound` that starts without a click, for sound begun partway."""
+    out = sound.copy()
+    fade = min(len(out), int(FADE_S * rate))
+    out[:fade] *= np.linspace(0.0, 1.0, fade, endpoint=False, dtype=out.dtype)
+    return out
 
 
 def at_times(y: pd.Series, time: np.ndarray) -> np.ndarray:

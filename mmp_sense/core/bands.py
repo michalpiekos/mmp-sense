@@ -1,7 +1,7 @@
 """Frequency bands: stretches of the spectrum picked out to be heard alone.
 
 A session holds a list of them. The ticked ones are what the window's
-Listen plays through; none ticked, it plays everything.
+Play sounds through; none ticked, it plays everything.
 """
 
 from __future__ import annotations

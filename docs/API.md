@@ -489,17 +489,24 @@ session.pause()
 Replay moves the cursor through history at `speed` times real time. The
 samples are not moved or copied, and new ones keep arriving while it
 plays. With no arguments it plays the selection, or from the cursor.
+This is the cursor alone; the window's **Play** button also makes the
+sound.
 
 ```python
 sound = session.audio("mic:amplitude", t0, t1, rate=48000, speed=1.0)
+sound = session.audio("mic:amplitude", amp="auto")     # a weak recording, raised
 ```
 
-`session.audio(x, t0, t1, rate=48000, speed=1.0)` is a stretch of one
+`session.audio(x, t0, t1, rate=48000, speed=1.0, bands=None, amp=None)` is a stretch of one
 signal -- a channel or a recipe, by the stretch rule -- as sound:
 float32 samples within -1..1 at `rate`, `speed` times as fast and as
 high. 16-bit samples keep their level, values already within -1..1 are
 kept, larger ones lose their mean and peak at 0.9, and a gap is silence.
-The window's **Listen** button plays it through the speakers.
+`amp` takes a number of dB from 0 to 60, or `"auto"`, which brings the
+louder moments to -20 dBFS: the mean goes, the sound is raised, and a
+limiter holds it under 0.9. The window's **Play** button sounds it
+through the speakers, with `amp="auto"` unless its **Amp** box says
+otherwise.
 
 ```python
 session.add_band(2800, 3200, "whine")         # -> "whine"; "band 1", ... unnamed
@@ -512,9 +519,9 @@ Frequency bands are the session's: `session.bands` lists them (`Band`:
 ticked ones as (low, high) pairs, and `set_band_on`, `remove_band`,
 `clear_bands` do what they say. `audio(..., bands=[(low, high), ...])`
 keeps only those frequencies of the stretch -- a zero-phase mask over
-all of it, with soft edges -- and raises the result to peak at 0.9.
-Listen plays through the ticked bands, or all of the sound when none
-are ticked. `session.rate_of(x)` is a signal's or recipe's sample rate.
+all of it, with soft edges -- and raises the result to peak at 0.9, or
+to what `amp` says. Play sounds the ticked bands, or all of the sound
+when none are ticked. `session.rate_of(x)` is a signal's or recipe's sample rate.
 
 ## Sources
 

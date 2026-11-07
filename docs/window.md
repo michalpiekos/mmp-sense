@@ -13,8 +13,7 @@
 | `n` / `p` | Jump to the next or previous peak of the focus signal |
 | `j` / `k` | Move the frequency cursor one bin down or up, in the first open spectrum or PSD |
 | `J` / `K` | Move it to the next peak below or above |
-| `space` | Play or pause the replay |
-| `s` | Listen: hear the focus signal -- the selection, else everything held from its start -- with the cursor running along (also the **Listen** button); again to stop. With bands ticked, only those frequencies, raised to be heard. The speed box applies, pitch with it |
+| `space` | Play the focus signal from the cursor, as sound with the cursor running along (also the **Play** button); again to pause, and again to resume. With a selection it starts at the cursor if that is inside, else at the selection's start, and stops at its end. With bands ticked, only those frequencies. The speed box applies, pitch with it. With no sound device the cursor still runs, and the status bar says why it is silent |
 | `b` | Add a frequency band, its edges typed in Hz |
 | `f` | Follow the newest data again |
 | `v` | Select the analysis window around the cursor |
@@ -50,6 +49,8 @@ collapsed dock keeps working -- the console still runs code. The
 left docks collapsed their column becomes a thin strip. Over each spectrum bar a
 short line marks the highest value that bin reached, for as long as the
 toolbar's **hold** says (2 s unless `--peak-hold` sets it; 0 hides them).
+The **Amp** box sets how loud Play is, and a change takes effect at once. `amp auto` raises a weak recording's louder moments to a comfortable level, by up to 60 dB, whatever one knock does; `+12`, `+24` and `+40 dB` are fixed. A limiter holds loud moments under full scale. Noise rises with the signal, so tick a band to cut hiss or rumble. `amp off` plays the recording at its own level, for comparing recordings by ear.
+
 An `xy` pane draws a script's `session.plot`; its chooser picks among the plots.
 
 The spectrogram's header chooses its segment -- 256 samples show when things happen, 16384 tell lines a few hertz apart -- and how high it reaches; its colours run from the typical cell up, and the psd pane's segments go to 65536.

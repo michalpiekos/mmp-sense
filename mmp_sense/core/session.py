@@ -25,7 +25,7 @@ import time as _time
 from dataclasses import asdict, dataclass, field
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, TypeAlias
+from typing import TYPE_CHECKING, Any, Callable, Literal, TypeAlias
 
 import numpy as np
 import pandas as pd
@@ -971,22 +971,27 @@ class Session:
 
     def audio(self, x: SignalRef, t0: float | None = None,
               t1: float | None = None, *, rate: int = 48000,
-              speed: float = 1.0, bands: Bands | None = None) -> np.ndarray:
+              speed: float = 1.0, bands: Bands | None = None,
+              amp: float | Literal["auto"] | None = None) -> np.ndarray:
         """The stretch of one signal as sound: float32 samples within
         -1..1 at `rate` per second, `speed` times as fast and as high.
         16-bit samples keep their level; anything outside -1..1 is
         scaled to fit; a gap is silence. `bands`, (low, high) Hz pairs
         or `Band`s, keeps only those frequencies, scaled to be heard;
-        `session.heard_bands` are the ticked ones."""
+        `session.heard_bands` are the ticked ones. `amp` raises a weak
+        signal by that many dB (0 to 60), or "auto" to a comfortable
+        level, a limiter holding loud moments under 0.9; bands are then
+        not raised on their own."""
         a, b = query.stretch(self, t0, t1)
         kept = band_ranges(bands) if bands is not None else None
         signal = self.signals.get(x) if isinstance(x, str) else None
         if signal is not None and signal.kind == "channel":
             window = self.window(a, b).home(x)
-            return query.as_audio(window[x], window.rate, rate, speed=speed, bands=kept)
+            return query.as_audio(window[x], window.rate, rate, speed=speed, bands=kept,
+                                  amp=amp)
         values, source_rate = self._one(x, a, b)
         return query.as_audio(values.to_numpy(float), source_rate, rate, speed=speed,
-                              bands=kept)
+                              bands=kept, amp=amp)
 
     # -- two signals ---------------------------------------------------
 

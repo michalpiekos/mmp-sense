@@ -113,7 +113,7 @@ def _top(nyquist) -> float:
 
 
 class BandDock(QWidget):
-    """Every band with its edges; the ticked ones are what Listen plays.
+    """Every band with its edges; the ticked ones are what Play sounds.
 
     `nyquist` gives the focus signal's name and highest frequency, for
     the form to show.
@@ -148,7 +148,7 @@ class BandDock(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
-        hint = QLabel("Listen plays the ticked bands; none ticked, all of it")
+        hint = QLabel("Play sounds the ticked bands; none ticked, all of it")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         layout.addWidget(self.tree, 1)

@@ -12,9 +12,8 @@ Keys:
     H / L        move it by a whole window
     Ctrl+h / l   move it by one sample
     n / p        jump to the next or previous peak of the focus signal
-    space        play or pause the replay
-    s            listen to the focus signal: the selection, else all held;
-                 only its ticked frequency bands if there are any
+    space        play or pause the focus signal from the cursor, within the
+                 selection if there is one; only its ticked bands if any
     b            add a frequency band, typed in Hz
     f            follow the newest data again
     v            select the analysis window around the cursor
@@ -58,6 +57,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core.query import fade_in
 from ..dsp.peaks import next_peak, step_bin
 from .views import views
 from .audio import make_player
@@ -79,6 +79,9 @@ log = logging.getLogger("mmp_sense.ui")
 TICK_MS = 50
 
 SPEEDS = ["0.25x", "0.5x", "1x", "2x", "4x"]
+#: The Amp box: what each entry asks of the sound.
+AMPS = {"amp off": None, "amp auto": "auto", "amp +12 dB": 12.0, "amp +24 dB": 24.0,
+        "amp +40 dB": 40.0}
 
 #: Everything a pane can be told changed: what one opened again needs.
 ALL_REASONS = frozenset({"data", "signals", "cursor", "selection", "analysis", "detections",
@@ -119,13 +122,17 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__(parent)
         self.session = session
-        #: What Listen plays sound through.
+        #: What Play sounds through.
         self.player = player if player is not None else make_player(self)
         self.player.finished.connect(self._sound_finished)
         #: The signal being heard, or None.
         self.hearing: str | None = None
         #: How many frequency bands it is heard through; 0 for all of it.
         self.hearing_bands = 0
+        #: The stretch being played: (start, end).
+        self.playing_stretch: tuple[float, float] | None = None
+        #: Why Play is silent, or "".
+        self.silent_because = ""
         self.window_s = float(window_s)
         self.peak_hold_s = max(0.0, float(peak_hold_s))
         self.follow = True
@@ -212,26 +219,25 @@ class MainWindow(QMainWindow):
 
         bar.addSeparator()
         self.play_action = QAction("Play", self)
-        self.play_action.setToolTip("Replay from the cursor (space)")
+        self.play_action.setToolTip(
+            "Play the focus signal from the cursor, within the selection if there is one; "
+            "only its ticked bands if any (space)")
         self.play_action.triggered.connect(self.toggle_play)
         bar.addAction(self.play_action)
-
-        self.sound_action = QAction("Listen", self)
-        self.sound_action.triggered.connect(self.toggle_sound)
-        if self.player.available:
-            self.sound_action.setToolTip(
-                "Hear the focus signal: the selection, else everything held; "
-                "only its ticked bands if any (s)")
-        else:
-            self.sound_action.setEnabled(False)
-            self.sound_action.setToolTip(f"Cannot play sound: {self.player.problem}")
-        bar.addAction(self.sound_action)
 
         self.speed = QComboBox()
         self.speed.addItems(SPEEDS)
         self.speed.setCurrentText("1x")
         self.speed.setToolTip("Replay speed")
         bar.addWidget(self.speed)
+
+        self.amp = QComboBox()
+        self.amp.addItems(AMPS)
+        self.amp.setCurrentText("amp auto")
+        self.amp.setToolTip("How loud Play is: auto raises a weak recording to a comfortable "
+                            "level, and loud moments are held down")
+        self.amp.currentTextChanged.connect(self._amp_changed)
+        bar.addWidget(self.amp)
 
         self.follow_action = QAction("Follow", self)
         self.follow_action.setCheckable(True)
@@ -487,7 +493,6 @@ class MainWindow(QMainWindow):
         bind("n", lambda: self.jump_peak(+1))
         bind("p", lambda: self.jump_peak(-1))
         bind("Space", self.toggle_play)
-        bind("s", self.toggle_sound)
         bind("f", lambda: self.follow_action.setChecked(True))
         bind("v", self.select_analysis_window)
         bind("Escape", self.session.clear_selection)
@@ -784,12 +789,13 @@ class MainWindow(QMainWindow):
         if not session.running:
             parts.append("stopped")
         if self.hearing is not None:
-            heard = f"listening to {self.hearing} {session.speed:g}x"
+            heard = f"playing {self.hearing} {session.speed:g}x, {self.amp.currentText()}"
             if self.hearing_bands:
                 heard += f", {self.hearing_bands} band{'s' if self.hearing_bands > 1 else ''}"
             parts.append(heard)
         elif session.playing:
-            parts.append(f"playing {session.speed:g}x")
+            silent = f", silent: {self.silent_because}" if self.silent_because else ""
+            parts.append(f"playing {session.speed:g}x{silent}")
         elif not self.follow:
             parts.append("paused view")
         if self._tick_times:
@@ -860,14 +866,65 @@ class MainWindow(QMainWindow):
         self._mark("data", "cursor", "selection")
 
     def toggle_play(self) -> None:
-        if self.session.playing:
+        """Play the focus signal from the cursor, or stop it."""
+        if self.session.playing or self.hearing is not None:
+            self.player.stop()
             self.session.pause()
-        else:
-            self.follow_action.setChecked(False)
-            self.session.play(speed=float(self.speed.currentText().rstrip("x")))
+            return
+        session = self.session
+        first, last = session.selection or session.span
+        start = session.cursor if first <= session.cursor < last else first
+        self.follow_action.setChecked(False)
+        self.playing_stretch = (first, last)
+        self._play_from(start, float(self.speed.currentText().rstrip("x")))
+
+    def _play_from(self, start: float, speed: float) -> None:
+        self.silent_because = self._start_sound(start, speed)
+        self.session.play(start, speed=speed, until=self.playing_stretch[1])
+        self._show_play_state()
+        self._update_status()
+
+    def _start_sound(self, start: float, speed: float) -> str:
+        """Sound `start` onwards of the stretch; returns why not, or ""."""
+        self.player.stop(quietly=True)
+        self.hearing = None
+        name = self.heard_signal()
+        if name is None:
+            return "no signal to hear"
+        if not self.player.available:
+            return self.player.problem
+        first, last = self.playing_stretch
+        bands = self.session.heard_bands
+        limit = self.nyquist()
+        if bands and limit and all(low >= limit[1] for low, _ in bands):
+            return f"{name} holds nothing above {limit[1]:.6g} Hz: no ticked band is in it"
+        rate = self.player.rate
+        try:
+            samples = self.session.audio(name, first, last, rate=rate, speed=speed,
+                                         bands=bands or None, amp=AMPS[self.amp.currentText()])
+        except Exception as exc:                              # noqa: BLE001
+            return f"cannot play {name}: {exc}"
+        own = self.session.streams[self.session.signals.stream_of(name)].buffer.t_start
+        ahead = round((start - max(first, own)) / speed * rate)
+        if ahead > 0:
+            samples = fade_in(samples[ahead:], rate)
+        if not len(samples):
+            return f"{name}: nothing to play there"
+        self.player.play(samples)
+        self.hearing = name
+        self.hearing_bands = len(bands)
+        return ""
+
+    def _amp_changed(self) -> None:
+        if self.hearing is not None and self.session.playing:
+            self._play_from(self.session.cursor, self.session.speed)
+
+    def _show_play_state(self) -> None:
+        playing = self.session.playing or self.hearing is not None
+        self.play_action.setText("Pause" if playing else "Play")
 
     def _playback_changed(self, payload: dict) -> None:
-        self.play_action.setText("Pause" if payload.get("playing") else "Play")
+        self._show_play_state()
         if self.hearing is not None and not payload.get("playing") \
                 and not payload.get("finished"):
             # Paused. At its end the sound, a little behind the cursor, plays out.
@@ -875,52 +932,18 @@ class MainWindow(QMainWindow):
         self._mark("cursor")
 
     def heard_signal(self) -> str | None:
-        """What Listen plays: the focus signal, or a group's first member."""
+        """What Play sounds: the focus signal, or a group's first member."""
         members = self.session.members(self.focus_signal)
         name = members[0] if members else self.focus_signal
         return name if name in self.session.signals else None
-
-    def toggle_sound(self) -> None:
-        """Play the focus signal's selection, else all of it held, with
-        the cursor running along; or stop it."""
-        if self.hearing is not None:
-            self.player.stop()
-            return
-        name = self.heard_signal()
-        if name is None or not self.player.available:
-            return
-        start, end = self.session.selection or self.session.span
-        speed = float(self.speed.currentText().rstrip("x"))
-        bands = self.session.heard_bands
-        limit = self.nyquist()
-        if bands and limit and all(low >= limit[1] for low, _ in bands):
-            self.statusBar().showMessage(
-                f"{name} holds nothing above {limit[1]:.6g} Hz: no ticked band is in it", 5000)
-            return
-        try:
-            samples = self.session.audio(name, start, end, rate=self.player.rate, speed=speed,
-                                         bands=bands or None)
-        except Exception as exc:                              # noqa: BLE001
-            self.statusBar().showMessage(f"cannot play {name}: {exc}", 5000)
-            return
-        if not len(samples):
-            self.statusBar().showMessage(f"{name}: nothing to play there", 3000)
-            return
-        self.player.play(samples)
-        self.hearing = name
-        self.hearing_bands = len(bands)
-        self.sound_action.setText("Stop")
-        self.follow_action.setChecked(False)
-        self.session.play(start, speed=speed, until=end)
-        self._update_status()
 
     def _sound_finished(self) -> None:
         if self.hearing is None:
             return
         self.hearing = None
-        self.sound_action.setText("Listen")
         if self.session.playing:
             self.session.pause()
+        self._show_play_state()
         self._update_status()
 
     def nyquist(self) -> tuple[str, float] | None:
