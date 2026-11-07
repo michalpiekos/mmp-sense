@@ -324,7 +324,7 @@ def test_sound_stays_sound(tmp_path):
     t = np.arange(48000) / 48000
     wavfile.write(tmp_path / "s.wav", 48000, (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32))
     (series,) = read_file(tmp_path / "s.wav")
-    assert series.channels == ["audio"] and series.sample_rate == 16000
+    assert series.channels == ["audio"] and series.sample_rate == 48000
 
 
 def test_a_24_bit_multichannel_wav_keeps_its_rate_and_channels(tmp_path):
@@ -336,7 +336,7 @@ def test_a_24_bit_multichannel_wav_keeps_its_rate_and_channels(tmp_path):
     body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
     body += b"data" + struct.pack("<I", len(raw)) + raw
     (tmp_path / "multi.wav").write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
-    (series,) = read_file(tmp_path / "multi.wav", audio_rate=0, keep_channels=True)
+    (series,) = read_file(tmp_path / "multi.wav")
     assert series.channels == ["ch0", "ch1", "ch2", "ch3"]
     assert series.sample_rate == rate
     assert series.values[0, 2] == pytest.approx(0.5)
@@ -558,7 +558,7 @@ def test_the_mcp_server_reads_what_the_window_reads(tmp_path):
 
     class Args:
         path, file, topic = str(tmp_path / "long.npy"), None, []
-        audio_rate, audio_channels, scale, units, buffer = 16000, False, None, None, 60.0
+        scale, units, buffer = None, None, 60.0
 
     Args.rate = rate
     backend = _own_session(Args)

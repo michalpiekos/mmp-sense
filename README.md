@@ -45,13 +45,12 @@ neither extra. The commands below assume the environment is active
 
 ```sh
 mmp-sense walk.mcap                         # every plottable topic, a stream each
-mmp-sense clip.wav                          # sound, as 16 kHz mono audio
+mmp-sense clip.wav                          # sound, as the file holds it
 mmp-sense voice.m4a                         # a clip from the phone's recorder
 mmp-sense table.tsv                         # a column per channel
 mmp-sense capture.npy --rate 400            # an array, with its sample rate
 mmp-sense bench.csv --replay --speed 2      # played back in time, twice as fast
 mmp-sense walk.mcap --topic /sensor/accelerometer --topic /sensor/gyroscope
-mmp-sense array.wav --audio-channels        # one signal per channel
 ```
 
 The file is named on its own or with `--file`. Without `--replay` the
@@ -241,8 +240,6 @@ and only your user can connect to it.
 | `FILE`, `--file FILE` | A data file to open; see [the formats](doc/formats.md). Without one, a simulated accelerometer. |
 | `--topic TOPIC` | An MCAP topic to open; again for another beside it. Default: every plottable one. |
 | `--replay`, `--speed N` | Play a file back in time, at N times its own rate. |
-| `--audio-rate HZ` | Rate sound is resampled to. Default 16000; 0 keeps the file's own. |
-| `--audio-channels` | Keep a sound file's channels rather than mixing them to one. |
 | `--rate HZ` | Sample rate of a file that carries no time (an array, a table without a time column); otherwise of the simulated source, default 1000. |
 | `--scale FACTOR` | Units per count of a sensor's WAV; it opens in counts without it. |
 | `--units UNITS` | The units of what is opened, e.g. `m/s^2`. |
@@ -260,7 +257,7 @@ and only your user can connect to it.
 | `--endpoint SOCKET` | A particular running session to attach to. |
 | `--no-attach` | Run a session of its own rather than attaching. |
 | `--list` | List the sessions serving on this machine. |
-| `FILE`, `--file`, `--topic`, `--audio-rate`, `--audio-channels`, `--rate`, `--scale`, `--units`, `--buffer` | As above, for a session of its own. |
+| `FILE`, `--file`, `--topic`, `--rate`, `--scale`, `--units`, `--buffer` | As above, for a session of its own. |
 
 The window's keys, buttons and docks are in [doc/window.md](doc/window.md).
 

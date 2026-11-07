@@ -1,7 +1,7 @@
 """Opening a data file, whatever it holds.
 
     read_file("walk.mcap")                 every plottable topic, a series each
-    read_file("clip.wav")                  16 kHz mono audio
+    read_file("clip.wav")                  sound, as the file holds it
     read_file("accel.wav", scale=0.0024)   a sensor's WAV, in m/s^2
     read_file("table.tsv")                 a column per channel
     read_file("capture.npy", rate=400)     an array, with its rate
@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ..core.data import TimeSeries
 from .arrays import NUMPY_SUFFIXES, read_numpy
-from .audio import AUDIO_SUFFIXES, SPEECH_RATE, is_sensor_wav, read_audio, read_sensor_wav
+from .audio import AUDIO_SUFFIXES, is_sensor_wav, read_audio, read_sensor_wav
 from .csv import TEXT_SUFFIXES, read_timeseries
 from .mcap import MAGIC, plottable_topics, read_mcap, read_mcap_topics, topics_in
 
@@ -80,8 +80,6 @@ def read_file(
     path: str | Path,
     *,
     topics=None,
-    audio_rate: int | None = None,
-    keep_channels: bool = False,
     rate: float | None = None,
     scale: float | None = None,
     units: str | None = None,
@@ -89,11 +87,9 @@ def read_file(
     """The series a file holds: one, or one per topic of an MCAP.
 
     `topics` picks an MCAP's topics, all plottable ones by default.
-    `audio_rate` is what sound is resampled to: 16 kHz unless given, 0
-    keeps the file's own; `keep_channels` keeps its channels rather than
-    mixing them. `rate` is the sample rate of a file that carries no time
-    (an array, a table without a time column). `scale` and `units` make a
-    sensor's WAV counts into a physical quantity.
+    `rate` is the sample rate of a file that carries no time (an array, a
+    table without a time column). `scale` and `units` make a sensor's WAV
+    counts into a physical quantity.
     """
     path = Path(path)
     kind = kind_of(path)
@@ -104,9 +100,7 @@ def read_file(
     if kind == "wav" and (scale is not None or is_sensor_wav(path)):
         return [read_sensor_wav(path, scale=scale, units=units)]
     if kind in ("wav", "audio"):
-        target = SPEECH_RATE if audio_rate is None else (audio_rate or None)
-        return [read_audio(path, target, keep_channels=keep_channels,
-                           decoder="wav" if kind == "wav" else "ffmpeg")]
+        return [read_audio(path, decoder="wav" if kind == "wav" else "ffmpeg")]
     if kind == "array":
         series = read_numpy(path, rate)
     else:

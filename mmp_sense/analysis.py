@@ -54,25 +54,21 @@ def from_frame(table: pd.DataFrame, *, name: str = "frame") -> Session:
 
 
 def load(path, topic: str | None = None, *, topics=None, buffer_s: float | None = None,
-         rate: int | None = None, keep_channels: bool = False,
          sample_rate: float | None = None, scale: float | None = None,
          units: str | None = None) -> Session:
     """A data file as a session holding the whole of it: an MCAP, a WAV or
     other audio, delimited text, or a NumPy array (see `io.files`).
 
     An MCAP opens every plottable topic, a stream each, unless `topic` or
-    `topics` names them. Audio is resampled to `rate` -- 16 kHz unless
-    given; 0 keeps the file's own -- and mixed to one channel unless
-    `keep_channels`. `sample_rate` times a file that carries no time; a
-    sensor's WAV (below 8 kHz) is in counts, or times `scale` in `units`.
+    `topics` names them. Audio keeps its own rate and channels.
+    `sample_rate` times a file that carries no time; a sensor's WAV
+    (below 8 kHz) is in counts, or times `scale` in `units`.
     """
     from .sources.recording import FileSources
 
     if topic and not topics:
         topics = [topic]
-    sources = FileSources(path, topics=topics, audio_rate=rate,
-                          keep_channels=keep_channels, rate=sample_rate,
-                          scale=scale, units=units)
+    sources = FileSources(path, topics=topics, rate=sample_rate, scale=scale, units=units)
     if len(sources) > 1:
         return _loaded_all(sources, buffer_s)
     return _loaded(sources[0], sources[0].series.duration, buffer_s)

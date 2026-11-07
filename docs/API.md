@@ -29,7 +29,7 @@ In the viewer's console `session` is the window's own, `signal` is
 
 | call | gives |
 |---|---|
-| `mmp_sense.load(path, topic=None, *, topics=None, rate=None, keep_channels=False, sample_rate=None, scale=None, units=None)` | a session holding all of a data file, in any format the window opens ([the formats](formats.md)): MCAP (every plottable topic, a stream each, on one clock; `topic` or `topics` picks them), sound (channel `audio`, resampled to `rate`, 16 kHz by default; 0 keeps its own; `keep_channels`: a channel per channel of the file, `ch0`, `ch1`, ...), a sensor's WAV (in counts, or times `scale` in `units`), delimited text or a NumPy array (`sample_rate`: for a file that carries no time) |
+| `mmp_sense.load(path, topic=None, *, topics=None, sample_rate=None, scale=None, units=None)` | a session holding all of a data file, in any format the window opens ([the formats](formats.md)): MCAP (every plottable topic, a stream each, on one clock; `topic` or `topics` picks them), sound (at its own rate; channel `audio`, or `ch0`, `ch1`, ... for several), a sensor's WAV (in counts, or times `scale` in `units`), delimited text or a NumPy array (`sample_rate`: for a file that carries no time) |
 | `mmp_sense.from_frame(table)` | a session holding a pandas DataFrame: its index is time in seconds, its columns the channels |
 | `mmp_sense.Session(source)` | a session on any source: `SyntheticAccelerometer`, `FileSources(path, replay=True)[0]`, one of your own |
 | `mmp_sense.io.read_file(path, **options)` | the series a file holds, as `TimeSeries`, without a session; `mmp_sense.io.kind_of(path)` says which format it is |

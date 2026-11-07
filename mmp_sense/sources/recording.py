@@ -147,12 +147,9 @@ def CsvSource(path: str | Path, **kwargs) -> SeriesSource:
     return SeriesSource(series, **kwargs)
 
 
-def AudioSource(path: str | Path, rate: int | None = None, *,
-                keep_channels: bool = False, **kwargs) -> SeriesSource:
-    """A voice clip or other audio file, as one channel called `audio`; with
-    `keep_channels`, a channel per channel of the file (`ch0`, `ch1`, ..)."""
-    from ..io.audio import SPEECH_RATE, read_audio
+def AudioSource(path: str | Path, **kwargs) -> SeriesSource:
+    """A voice clip or other audio file, at its own rate, as one channel
+    called `audio` or, for several, `ch0`, `ch1`, ..."""
+    from ..io.audio import read_audio
 
-    series = read_audio(path, SPEECH_RATE if rate is None else (rate or None),
-                        keep_channels=keep_channels)
-    return SeriesSource(series, **kwargs)
+    return SeriesSource(read_audio(path), **kwargs)

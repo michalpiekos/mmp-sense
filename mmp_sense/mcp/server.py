@@ -151,8 +151,7 @@ def _own_session(args) -> LocalBackend:
         from ..analysis import file_buffer
         from ..sources.recording import FileSources
 
-        sources = FileSources(path, topics=topics, audio_rate=args.audio_rate,
-                              keep_channels=args.audio_channels, rate=args.rate,
+        sources = FileSources(path, topics=topics, rate=args.rate,
                               scale=args.scale, units=args.units)
         buffer_s, max_samples = file_buffer(sources, buffer_s)
     else:
@@ -182,11 +181,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--topic", action="append", default=[],
                         help="an MCAP topic; again for another (default: every "
                              "plottable topic)")
-    parser.add_argument("--audio-rate", type=int, default=16000, metavar="HZ",
-                        help="rate audio is resampled to (default 16000); 0 keeps "
-                             "the file's own")
-    parser.add_argument("--audio-channels", action="store_true",
-                        help="keep an audio file's channels rather than mixing them")
     parser.add_argument("--rate", type=float, default=None, metavar="HZ",
                         help="sample rate of a file that carries no time; of the "
                              "simulated source otherwise (default 1000)")

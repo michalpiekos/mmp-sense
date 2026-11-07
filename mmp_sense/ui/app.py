@@ -2,7 +2,7 @@
 
     mmp-sense walk.mcap                     a recording: every plottable topic
     mmp-sense walk.mcap --topic /sensor/accelerometer --topic /sensor/gyroscope
-    mmp-sense clip.m4a                      a voice clip, as 16 kHz audio
+    mmp-sense clip.m4a                      a voice clip, as the file holds it
     mmp-sense accel.wav --scale 0.0024 --units m/s^2   a sensor's WAV
     mmp-sense table.tsv                     delimited text, a column per channel
     mmp-sense capture.npy --rate 400        an array, with its sample rate
@@ -35,9 +35,7 @@ def build_session(args):
         from ..sources.recording import FileSources
 
         sources = FileSources(path, replay=args.replay, speed=args.speed, topics=topics,
-                              audio_rate=args.audio_rate,
-                              keep_channels=args.audio_channels, rate=args.rate,
-                              scale=args.scale, units=args.units)
+                              rate=args.rate, scale=args.scale, units=args.units)
         from ..analysis import file_buffer
 
         # All of a file, not the last --buffer seconds of it.
@@ -69,12 +67,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--topic", action="append", default=[],
                         help="an MCAP topic to open; again for another beside it, on "
                              "the same time axis (default: every plottable topic)")
-    parser.add_argument("--audio-rate", type=int, default=16000, metavar="HZ",
-                        help="rate audio files are resampled to (default 16000, "
-                             "enough for speech); 0 keeps the file's own")
-    parser.add_argument("--audio-channels", action="store_true",
-                        help="keep an audio file's channels (ch0, ch1, ..) "
-                             "rather than mixing them to one")
     parser.add_argument("--replay", action="store_true",
                         help="play a file back in time rather than loading it at once")
     parser.add_argument("--speed", type=float, default=1.0, help="replay speed")

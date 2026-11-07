@@ -38,7 +38,7 @@ def test_a_file_opened_in_the_window_is_held_whole(small_cap, tmp_path):
     from mmp_sense.ui.app import build_session, parse_args
 
     wavfile.write(tmp_path / "long.wav", 8000, np.ones(8000 * 3, dtype=np.int16))
-    session = build_session(parse_args(["--file", str(tmp_path / "long.wav"), "--audio-rate", "8000"]))
+    session = build_session(parse_args(["--file", str(tmp_path / "long.wav")]))
     session.poll()
     assert len(session.buffer) == 8000 * 3 > small_cap
 
