@@ -41,6 +41,8 @@ What a session knows: `session.channels`, `session.streams`,
 `clear_selection`), `session.frequency_cursor` (Hz, or `None` when not
 placed; independent of the time cursor, shared by the frequency charts),
 `session.running`, `session.context` (all of it at once).
+`session.samples(signal, t0=None, t1=None)` gives one signal as NumPy:
+see [Scripts](#scripts).
 
 A live session takes samples when polled (`session.poll()`; the window
 polls on a timer). `session.stop_intake()` stops taking them and keeps
@@ -399,7 +401,7 @@ session.show(strength, knock)        # a chart per value recipe; marks for event
 session.hide("knock")
 session.set_drawn("knock", False)    # marks off, still counted and askable
 session.group("motion", ["strength", "az"])     # several on one chart; None removes
-session.plot("motion", view=None)    # "spectrum", "spectrogram", "psd" for those panes
+session.chart("motion", view=None)    # "spectrum", "spectrogram", "psd" for those panes
 ```
 
 `show` makes a value recipe a signal of its name -- plotted, listed,
@@ -407,6 +409,38 @@ askable by name -- and one with components a group of `name.component`
 signals. Showing again under a name replaces it. Once shown, the recipe
 and each named step inside it can be asked for by name:
 `session.events("knock")`.
+
+## Scripts
+
+A script is a Python file with `main(session)`. The session is an
+argument, so one script runs on the window's session or on a loaded one:
+
+```python
+from mmp_sense import Session
+
+def main(session: Session) -> None:
+    s = session.samples("accel_x", 4.0, 6.0)
+    session.plot("doubled", s.time, s.values * 2, x_label="Time", x_units="s",
+                 y_label="Twice", y_units=s.units)
+```
+
+| call | gives |
+|---|---|
+| `mmp_sense.run_script(path, session)` | runs the file's `main(session)` and returns what it returns: read afresh each time, with modules beside it importable |
+| `run(path)` | the same in the window's console, on its session; `mmp-sense-send --script PATH` sends it |
+| `session.samples(x, t0=None, t1=None)` | `Samples` of one channel, shown name or recipe over the stretch (the selection, else everything held): `.values` and `.time` as float arrays, `.rate` in samples per second, `.units`, `.name` |
+| `session.plot(name, x, y, *, x_label="", x_units="", y_label="", y_units="")` | draws `y` against `x` in an `xy` pane, 1-D and of equal length; returns the `Plot` |
+| `session.plots` | every `Plot` by name: `.x`, `.y` (read-only copies) and the labels |
+| `session.remove_plot(name)` | forgets a plot and closes its pane |
+
+A plot is not a signal. Plotting under a name replaces what it held and
+updates the same pane, so a rerun adds nothing to `session.signals`,
+`session.streams` or `session.groups`; only a new name adds a plot. If the
+pane was closed, the next plot of that name opens it. Units are shown as
+given, without SI prefixes. With no window, a plot is only kept.
+
+`mmp_sense` ships type information. `Session`, `Samples` and `Plot` are the
+types to annotate with, and `SignalRef` is a channel, shown name or recipe.
 
 ## Adding an op
 
@@ -583,6 +617,7 @@ mmp_sense/
     mcp/        the tools, the local socket, the stdio server
     ui/         Qt: the window, the panes, the console
     analysis.py load(), from_frame(): sessions without a window
+    scripts.py  run_script(): a file's main(session)
     examples/   runnable worked examples
 ```
 

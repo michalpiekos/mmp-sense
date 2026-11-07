@@ -32,7 +32,7 @@ Whichever of the three changes something, the other two see it.
 
 ```sh
 python3 -m venv .venv
-.venv/bin/pip install -e '.[gui,mcp]'
+.venv/bin/pip install --config-settings editable_mode=compat -e '.[gui,mcp]'
 ```
 
 Python 3.12 or later. The core needs NumPy, SciPy, pandas and mcap; the
@@ -231,6 +231,39 @@ the window started last, or to `--socket PATH` / `$MMP_SENSE_SOCKET`. The
 socket runs what it is sent, so nothing listens unless `--listen` asks,
 and only your user can connect to it.
 
+## Run a script in the window
+
+A script is a Python file anywhere on disk with a `main` that takes the
+session. It gets the window's own session, so there is nothing to look up
+and your editor checks and completes it:
+
+```python
+# ~/experiments/ax_spectrum.py
+import numpy as np
+from mmp_sense import Session
+
+def main(session: Session) -> None:
+    s = session.samples("accel_x")             # the selection, else everything held
+    frequency = np.fft.rfftfreq(len(s.values), 1 / s.rate)
+    session.plot("ax spectrum", frequency, np.abs(np.fft.rfft(s.values)),
+                 x_label="Frequency", x_units="Hz",
+                 y_label="Magnitude", y_units=s.units)
+```
+
+```sh
+mmp-sense --listen
+mmp-sense-send --script ~/experiments/ax_spectrum.py     # from any directory
+```
+
+Or type `run("ax_spectrum.py")` in the console. Select another stretch and
+run it again: the file is read afresh, and the chart called `ax spectrum`
+updates in place. Plotting under one name never adds signals or streams.
+
+The script runs in the window's process, so the window waits until it
+returns. It can import modules beside it. If it fails, the **Python**
+title turns red and the traceback is in the console. The install above
+lets pyright and mypy find `mmp_sense` from any directory.
+
 ## The options those commands take
 
 **mmp-sense** (or `python -m mmp_sense`)
@@ -258,6 +291,14 @@ and only your user can connect to it.
 | `--no-attach` | Run a session of its own rather than attaching. |
 | `--list` | List the sessions serving on this machine. |
 | `FILE`, `--file`, `--topic`, `--rate`, `--scale`, `--units`, `--buffer` | As above, for a session of its own. |
+
+**mmp-sense-send**
+
+| Option | Meaning |
+|---|---|
+| `--script PATH` | Run this file's `main(session)` rather than code from stdin. |
+| `--socket PATH` | The window to send to. Default `$MMP_SENSE_SOCKET`, else the newest. |
+| `--list` | List the windows listening. |
 
 The window's keys, buttons and docks are in [doc/window.md](doc/window.md).
 

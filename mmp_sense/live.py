@@ -1,6 +1,6 @@
 """The console's names, for a script written in an editor and sent to it.
 
-    from mmp_sense.live import session, signal, show, ui
+    from mmp_sense.live import run, session, signal, show, ui
 
 In a file, the line tells a linter and an editor what these are -- the
 running `Session`, `signal()`, the window -- so it can check and
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-__all__ = ["session", "signal", "show", "ui"]
+__all__ = ["run", "session", "signal", "show", "ui"]
 
 if TYPE_CHECKING:
     from .core.graph.node import signal as signal
@@ -30,6 +30,8 @@ if TYPE_CHECKING:
     session = _running()
     show = session.show
     ui: MainWindow
+
+    def run(path: str) -> Any: ...
 
 _namespace: dict[str, Any] | None = None
 

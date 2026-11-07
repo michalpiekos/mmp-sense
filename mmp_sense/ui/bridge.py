@@ -29,7 +29,8 @@ class SessionBridge(QObject):
     analysis_changed = Signal(float)
     playback_changed = Signal(dict)
     intake_changed = Signal(dict)
-    plot_requested = Signal(str, object)
+    chart_requested = Signal(str, object)
+    plots_changed = Signal(str)
     detections_changed = Signal(dict)
     bands_changed = Signal(dict)
 
@@ -73,8 +74,10 @@ class SessionBridge(QObject):
             self.detections_changed.emit(payload)
         elif kind == "bands":
             self.bands_changed.emit(payload)
-        elif kind == "plot":
-            self.plot_requested.emit(payload.get("signal", ""), payload.get("view"))
+        elif kind == "chart":
+            self.chart_requested.emit(payload.get("signal", ""), payload.get("view"))
+        elif kind == "plots":
+            self.plots_changed.emit(payload.get("name", ""))
 
     def close(self) -> None:
         self._unlisten()

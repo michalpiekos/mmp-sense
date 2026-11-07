@@ -11,6 +11,8 @@
     session.events(triple)                          # a DataFrame of events
     session.show(triple)                            # drawn on the viewer's charts
 
+A script takes the session as an argument; see `run_script`.
+
 The viewer (`python -m mmp_sense`) and the MCP server (`mmp-sense-mcp`) are adapters
 over a session; see API.md.
 """
@@ -20,8 +22,10 @@ from .analysis import from_frame, load
 from .core.array import Array
 from .core.bands import Band
 from .core.graph import GraphError, Lookback, Node, beam, pointwise, register_op, signal
-from .core.session import Session
+from .core.plots import Plot
+from .core.session import Samples, Session, SignalRef
 from .core.signals import SignalError
+from .scripts import run_script
 from .sources import (
     CsvSource,
     FileSources,
@@ -42,10 +46,13 @@ __all__ = [
     "GraphError",
     "Lookback",
     "Node",
+    "Plot",
     "RecordingSource",
+    "Samples",
     "SeriesSource",
     "Session",
     "SignalError",
+    "SignalRef",
     "Source",
     "SyntheticAccelerometer",
     "__version__",
@@ -53,6 +60,7 @@ __all__ = [
     "load",
     "pointwise",
     "register_op",
+    "run_script",
     "signal",
 ]
 

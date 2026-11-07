@@ -35,6 +35,9 @@ mmp-sense-send = "mmp_sense_send:main"
 [tool.setuptools.packages.find]
 include = ["mmp_sense*"]
 
+[tool.setuptools.package-data]
+mmp_sense = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = [

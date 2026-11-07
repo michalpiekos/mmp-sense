@@ -31,8 +31,8 @@ def test_a_group_of_any_signals(session):
     session.listen(lambda kind, payload: heard.append((kind, payload.get("signal"))))
     session.group("motion", ["magnitude", members[2]])
     assert session.groups["motion"] == ["magnitude", "hp.accel_z"]
-    session.plot("motion")
-    assert ("plot", "motion") in heard
+    session.chart("motion")
+    assert ("chart", "motion") in heard
 
     session.hide("hp")                                # a member goes: skipped
     assert session.groups["motion"] == ["magnitude"]
@@ -52,7 +52,7 @@ def test_a_group_name_must_be_free_and_its_members_real(session):
     with pytest.raises(SignalError):
         session.group("g", ["accel_x", "nothing"])
     with pytest.raises(SignalError):
-        session.plot("nothing")
+        session.chart("nothing")
     session.group("g", ["accel_x"])
     with pytest.raises(ValueError):
         session.show(mmp_sense.signal("accel_x").highpass(cutoff_hz=5, name="g"))
@@ -95,7 +95,7 @@ def test_showing_a_vector_opens_one_chart_with_every_component(window, session):
 def test_plotting_a_group_opens_one_chart(window, session):
     session.group("motion", ["magnitude", "accel_z"])
     before = len(window.panes)
-    session.plot("motion")
+    session.chart("motion")
     window.tick()
     assert len(window.panes) == before + 1
     assert curves(window.panes[-1]) == ["accel_z", "magnitude"]

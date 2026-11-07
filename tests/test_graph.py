@@ -619,7 +619,7 @@ def test_show_publishes_values_as_signals_and_events_as_detections(session):
     assert names == ["energy", "knock", "double_knock"]
     assert session.signals.get("energy").source == "graph:energy"
     assert session.detection_names == ["knock", "double_knock"]
-    assert "detections" in heard and "plot" in heard
+    assert "detections" in heard and "chart" in heard
 
     window = session.window()
     energy = session.values(graph.find("energy"))

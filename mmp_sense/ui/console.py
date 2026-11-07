@@ -21,6 +21,7 @@ BANNER = """mmp-sense -- `session` is what the charts draw; `signal` starts a re
     show(strength)                     # a chart appears
     session.values(strength)           # pandas: the selection, or everything
     session.spectrum_summary(session.channels[0], 4.0, 4.2)
+    run("experiment.py")               # its main(session), on this session
 
     knock = (strength > 0.7).events(refractory="145ms", name="knock")
     show(knock)                        # marked on every chart

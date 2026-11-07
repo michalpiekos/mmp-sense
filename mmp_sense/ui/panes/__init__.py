@@ -14,6 +14,7 @@ from .psd_pane import PsdPane
 from .signal_pane import SignalPane
 from .spectrogram_pane import SpectrogramPane
 from .spectrum_pane import SpectrumPane
+from .xy_pane import XYPane
 
 register_view("signal", SignalPane, accepts=("timeseries",),
               description="Signals against time")
@@ -27,5 +28,7 @@ register_view("direction", DirectionPane, accepts=(),
               description="Where a sound comes from: an array's power by azimuth")
 register_view("correlation", CorrelationPane, accepts=(),
               description="Two signals' correlation against lag: their delay")
+register_view("xy", XYPane, accepts=(),
+              description="A script's result: session.plot(name, x, y)")
 
-__all__ = ["CorrelationPane", "DirectionPane", "Pane", "PsdPane", "SignalPane", "SpectrogramPane", "SpectrumPane"]
+__all__ = ["CorrelationPane", "DirectionPane", "Pane", "PsdPane", "SignalPane", "SpectrogramPane", "SpectrumPane", "XYPane"]

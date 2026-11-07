@@ -50,6 +50,8 @@ collapsed dock keeps working -- the console still runs code. The
 left docks collapsed their column becomes a thin strip. Over each spectrum bar a
 short line marks the highest value that bin reached, for as long as the
 toolbar's **hold** says (2 s unless `--peak-hold` sets it; 0 hides them).
+An `xy` pane draws a script's `session.plot`; its chooser picks among the plots.
+
 The spectrogram's header chooses its segment -- 256 samples show when things happen, 16384 tell lines a few hertz apart -- and how high it reaches; its colours run from the typical cell up, and the psd pane's segments go to 65536.
 **PDF** in the toolbar adds a narrow column to the right of every signal
 chart: the distribution of its values, turned on its side so each value

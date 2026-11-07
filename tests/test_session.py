@@ -70,9 +70,9 @@ def test_listeners_hear_what_changed(session):
     session.set_selection((1.0, 2.0))
     session.analysis_window = 0.1
     session.show(twice(), plot=False)
-    session.plot("twice")
+    session.chart("twice")
     kinds = [kind for kind, _ in heard]
-    assert kinds == ["cursor", "selection", "analysis", "signals", "plot"]
+    assert kinds == ["cursor", "selection", "analysis", "signals", "chart"]
     stop()
     session.set_cursor(3.0)
     assert len(heard) == 5
@@ -116,10 +116,10 @@ def test_pausing_and_speed_are_refused_when_silly(session):
 
 def test_plot_marks_a_signal_active_and_refuses_an_unknown_one(session):
     session.show(twice(), plot=False)
-    session.plot("twice")
+    session.chart("twice")
     assert "twice" in session.active_signals
     with pytest.raises(Exception, match="no signal"):
-        session.plot("nothing")
+        session.chart("nothing")
 
 
 def test_the_context_says_what_is_being_looked_at(session):

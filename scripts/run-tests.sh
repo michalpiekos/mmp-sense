@@ -43,7 +43,8 @@ if [ ! -x "$venv/bin/python" ]; then
 	install=yes
 fi
 if [ "$install" = yes ]; then
-	"$venv/bin/pip" install --quiet --editable '.[gui,mcp,test]'
+	"$venv/bin/pip" install --quiet --config-settings editable_mode=compat \
+		--editable '.[gui,mcp,test]'
 fi
 
 exec "$venv/bin/python" -m pytest "$@"

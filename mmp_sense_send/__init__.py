@@ -1,6 +1,7 @@
 """Send Python code to an mmp-sense window's console: `mmp-sense-send`.
 
     printf 'x = 1\\n' | mmp-sense-send
+    mmp-sense-send --script experiment.py         (runs its main(session))
     :'<,'>w !mmp-sense-send                       (from nvim)
 
 A window started with `--listen` takes code on a Unix socket and runs it
@@ -82,6 +83,15 @@ def prepare(code: str) -> str:
     return textwrap.dedent(code.expandtabs(4)).strip("\n") + "\n"
 
 
+def script_call(path: str) -> str:
+    """The code that runs a script; the path is resolved here, as the window's
+    working directory is not the sender's."""
+    script = Path(path).expanduser().resolve()
+    if not script.is_file():
+        raise ValueError(f"no such script: {script}")
+    return f"run({str(script)!r})\n"
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="mmp-sense-send",
@@ -90,6 +100,8 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--socket", help="the window's socket; default "
                         "$MMP_SENSE_SOCKET, else the newest window listening")
+    parser.add_argument("--script", metavar="PATH",
+                        help="run this file's main(session) instead of reading stdin")
     parser.add_argument("--list", action="store_true",
                         help="list the windows listening and exit")
     args = parser.parse_args(argv)
@@ -98,7 +110,7 @@ def main(argv=None) -> int:
             for path in listeners():
                 print(path)
             return 0
-        code = prepare(sys.stdin.read())
+        code = script_call(args.script) if args.script else prepare(sys.stdin.read())
         if not code.strip():
             return 0
         answer = send(code, args.socket)

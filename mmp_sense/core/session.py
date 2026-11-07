@@ -23,10 +23,13 @@ import math
 import threading
 import time as _time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Callable
+from collections.abc import Sequence
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable, TypeAlias
 
 import numpy as np
 import pandas as pd
+from numpy.typing import ArrayLike, NDArray
 from scipy.signal import sosfiltfilt
 
 from . import query
@@ -38,15 +41,28 @@ from .cycles import CycleAverage, average_cycles
 from .graph import Evaluator, Node
 from .graph import signal as _signal
 from .graph.evaluate import home_of
+from .graph.series import Duration
 from .graph.series import seconds as _seconds
 from .graph.ops import event_table, ops
 from .graph.ops import op as graph_op
 from .data import EventSeries
+from .plots import Plot, make_plot
 from .signals import SEPARATOR, SignalError, SignalTable, Stream, Window
 
-__all__ = ["Session", "Context", "EVENTS", "stream_names"]
+if TYPE_CHECKING:
+    from ..sources.base import Source
+    from .query import SyncEstimate
+
+__all__ = ["Session", "Context", "Samples", "SignalRef", "EVENTS", "stream_names"]
 
 log = logging.getLogger("mmp_sense.session")
+
+#: What a question is asked of: a channel, a shown name, or a recipe.
+SignalRef: TypeAlias = str | Node
+#: A shaft or repetition rate: Hz, or the signal that says it.
+RateRef: TypeAlias = float | SignalRef
+#: Frequency bands: `Band`s, or (low, high) pairs in Hz.
+Bands: TypeAlias = Sequence[Band | tuple[float, float]]
 
 #: What a listener can be told about. A listener takes (kind, payload).
 EVENTS = (
@@ -58,7 +74,8 @@ EVENTS = (
     "selection",    # the selected region changed or was cleared
     "analysis",     # the analysis window changed
     "playback",     # playback started, stopped or reached the end
-    "plot",         # something asked for a signal to be plotted
+    "chart",        # something asked for a signal to be charted
+    "plots",        # a named (x, y) result was drawn again or removed
     # Samples are no longer being taken, or are being taken again -- and
     # `running: True` means from an empty buffer, so the cursor and the
     # selection went with the samples and are worth reading again.
@@ -97,6 +114,17 @@ class Context:
         out = asdict(self)
         out["selection"] = list(self.selection) if self.selection else None
         return out
+
+
+@dataclass(frozen=True, eq=False)
+class Samples:
+    """One signal over a stretch of time, as NumPy."""
+
+    name: str
+    values: NDArray[np.float64]
+    time: NDArray[np.float64]
+    rate: float                    # samples per second
+    units: str = ""
 
 
 def _title(x) -> str:
@@ -175,6 +203,7 @@ class Session:
         self._frequency_cursor: float | None = None
         self._selection: tuple[float, float] | None = None
         self._bands: list[Band] = []
+        self._plots: dict[str, Plot] = {}
         self._analysis_window = float(analysis_window)
         self._active: list[str] = []
         self._following = True
@@ -195,12 +224,12 @@ class Session:
         return dict(self.signals.streams)
 
     @property
-    def source(self):
+    def source(self) -> Source | None:
         """The first stream's source."""
         return self.signals.streams[self.signals.first].source
 
     @source.setter
-    def source(self, source) -> None:
+    def source(self, source: Source) -> None:
         self.signals.streams[self.signals.first].source = source
 
     @property
@@ -225,7 +254,7 @@ class Session:
         sources = [getattr(s, "name", "") for s in self._sources()]
         return " + ".join(n for n in sources if n) or self.dataset
 
-    def attach(self, source, *, keep_signals: bool = True, name: str | None = None) -> "Session":
+    def attach(self, source: Source, *, keep_signals: bool = True, name: str | None = None) -> "Session":
         """Take samples from `source` from now on, and from it alone.
 
         The shown recipes are kept: a detector worked out on one stream
@@ -261,7 +290,7 @@ class Session:
         self.notify("source", dataset=self.dataset, channels=list(self.signals.channels))
         return self
 
-    def add(self, source, name: str | None = None) -> str:
+    def add(self, source: Source, name: str | None = None) -> str:
         """Take samples from `source` too, as a stream of its own; returns
         the stream's name (`name`, or one made from the source's).
 
@@ -464,8 +493,8 @@ class Session:
 
     # -- charts --------------------------------------------------------
 
-    def plot(self, name: str, view: str | None = None) -> None:
-        """Ask for a signal, or a group of them, to be plotted.
+    def chart(self, name: str, view: str | None = None) -> None:
+        """Ask for a signal, or a group of them, to be charted.
 
         A GUI listening to the session opens a pane; with no GUI this
         only marks the signals active, so the same script works headless.
@@ -477,7 +506,37 @@ class Session:
         for signal in members if members is not None else [self.signals.canonical(name)]:
             if signal not in self._active:
                 self._active.append(signal)
-        self.notify("plot", signal=name, view=view)
+        self.notify("chart", signal=name, view=view)
+
+    # -- plots: results that are not signals -----------------------------
+
+    def plot(self, name: str, x: ArrayLike, y: ArrayLike, *, x_label: str = "",
+             x_units: str = "", y_label: str = "", y_units: str = "") -> Plot:
+        """Draw `y` against `x` under `name`, replacing what that name held.
+
+        A rerun with the same name updates the same chart and registers
+        nothing new. Without a window the plot is only kept, in `plots`.
+        """
+        plot = make_plot(name, x, y, x_label=x_label, x_units=x_units,
+                         y_label=y_label, y_units=y_units)
+        with self._lock:
+            self._plots[name] = plot
+        self.notify("plots", name=name)
+        return plot
+
+    def remove_plot(self, name: str) -> None:
+        """Forget a plot; a window closes its chart."""
+        with self._lock:
+            if name not in self._plots:
+                raise KeyError(f"no plot {name!r}; have {', '.join(self._plots) or 'none'}")
+            del self._plots[name]
+        self.notify("plots", name=name)
+
+    @property
+    def plots(self) -> dict[str, Plot]:
+        """Every plot by name."""
+        with self._lock:
+            return dict(self._plots)
 
     # -- groups: several signals on one chart ------------------------------
 
@@ -560,10 +619,10 @@ class Session:
             elif node.op == "signal":
                 wanted = node.params.get("names") or ()
                 if plot and len(wanted) == 1 and wanted[0] in self.signals:
-                    self.plot(wanted[0])
+                    self.chart(wanted[0])
             if plot and columns:
                 # Components go on one chart together, as the source's do.
-                self.plot(name if columns != [name] else columns[0])
+                self.chart(name if columns != [name] else columns[0])
         if detections:
             self.notify("detections", names=self.detection_names)
         return names
@@ -639,7 +698,8 @@ class Session:
         node = self._node(x)
         return node, self.evaluator.evaluate(node, self.window())
 
-    def values(self, x, t0=None, t1=None) -> pd.Series | pd.DataFrame:
+    def values(self, x: SignalRef, t0: float | None = None,
+               t1: float | None = None) -> pd.Series | pd.DataFrame:
         """Values against time: a Series indexed by time (seconds), or a
         DataFrame with a column per component -- per frequency, for frames."""
         node, result = self._computed(x)
@@ -652,7 +712,8 @@ class Session:
             values = values.astype(float)
         return query.frame(result.time[keep], values, name=node.title, coords=result.coords)
 
-    def events(self, x, t0=None, t1=None) -> pd.DataFrame:
+    def events(self, x: SignalRef, t0: float | None = None,
+               t1: float | None = None) -> pd.DataFrame:
         """The events of an events recipe (or a shown one) starting in the
         stretch: `start`, `end`, `duration` in seconds, and what else the
         recipe tells (a pattern's `times`, `gap`)."""
@@ -670,7 +731,8 @@ class Session:
         out = out.drop(columns=drop)
         return out[first + [c for c in out.columns if c not in first]].reset_index(drop=True)
 
-    def stats(self, x, t0=None, t1=None) -> pd.Series | pd.DataFrame:
+    def stats(self, x: SignalRef, t0: float | None = None,
+              t1: float | None = None) -> pd.Series | pd.DataFrame:
         """n, min, max, mean, rms, std and peak_to_peak over the stretch;
         a column per component for several."""
         values = self.values(x, t0, t1)
@@ -679,7 +741,8 @@ class Session:
         return pd.DataFrame({c: query.summarise(values[c].to_numpy(float))
                              for c in values.columns})
 
-    def distribution(self, x, t0=None, t1=None, *, bins: int = 64,
+    def distribution(self, x: SignalRef, t0: float | None = None,
+                     t1: float | None = None, *, bins: int = 64,
                      low: float | None = None, high: float | None = None) -> pd.Series:
         """The density of the stretch's values, indexed by each bin's
         centre: a histogram whose area is 1. `low` and `high` limit the
@@ -696,10 +759,20 @@ class Session:
     def _one(self, x, t0, t1):
         values = self.values(x, t0, t1)
         if isinstance(values, pd.DataFrame):
-            raise ValueError(f"{values.columns.name}: a spectrum is of one signal; pick a "
+            raise ValueError(f"{values.columns.name}: this takes one signal; pick a "
                              "component, e.g. recipe['az']")
         node, result = self._computed(x)
         return values, result.rate or self.rate
+
+    def samples(self, x: SignalRef, t0: float | None = None,
+                t1: float | None = None) -> Samples:
+        """A signal's values, times and sample rate over the stretch, as NumPy.
+
+        One signal: pick a component of a recipe that has several."""
+        values, rate = self._one(x, t0, t1)
+        node, result = self._computed(x)
+        return Samples(node.title, values.to_numpy(float), values.index.to_numpy(float),
+                       float(rate), result.units)
 
     def _aligned(self, x, t0, t1, align, ref_hz):
         """The stretch of `x`: (values, sample rate, reference rate, name).
@@ -743,8 +816,10 @@ class Session:
             node = node.inputs[0]
         return lag
 
-    def spectrum(self, x, t0=None, t1=None, *, taper: str = "hann",
-                 pad_to: int | None = None, align=None, ref_hz: float | None = None
+    def spectrum(self, x: SignalRef, t0: float | None = None,
+                 t1: float | None = None, *, taper: str = "hann",
+                 pad_to: int | None = None, align: RateRef | None = None,
+                 ref_hz: float | None = None
                  ) -> pd.Series:
         """Amplitude against frequency (Hz) over the stretch, its mean
         removed. `taper` fades the ends ("hann"; "boxcar" is none);
@@ -757,8 +832,10 @@ class Session:
         return pd.Series(amplitude, index=pd.Index(frequency, name="frequency_hz"),
                          name=name)
 
-    def psd(self, x, t0=None, t1=None, *, segment: int = 1024, overlap: float = 0.5,
-            taper: str = "hann", align=None, ref_hz: float | None = None) -> pd.Series:
+    def psd(self, x: SignalRef, t0: float | None = None,
+            t1: float | None = None, *, segment: int = 1024, overlap: float = 0.5,
+            taper: str = "hann", align: RateRef | None = None,
+            ref_hz: float | None = None) -> pd.Series:
         """Power spectral density over the stretch, in units squared per
         Hz, indexed by frequency: Welch's average of the spectra of
         `segment`-sample pieces overlapping by `overlap`. Noise reads the
@@ -770,7 +847,8 @@ class Session:
         return pd.Series(density, index=pd.Index(frequency, name="frequency_hz"),
                          name=name)
 
-    def orders(self, x, rate, t0=None, t1=None, *, taper: str = "hann",
+    def orders(self, x: SignalRef, rate: RateRef, t0: float | None = None,
+               t1: float | None = None, *, taper: str = "hann",
                pad_to: int | None = None) -> pd.Series:
         """Order tracking: the amplitude spectrum of the stretch with
         `rate` (a signal or recipe, Hz) divided out, indexed by multiples
@@ -782,7 +860,8 @@ class Session:
         return pd.Series(amplitude, index=pd.Index(frequency / ref, name="order"),
                          name=name)
 
-    def cycle_average(self, x, rate, t0=None, t1=None, *, lock: int | None = None,
+    def cycle_average(self, x: SignalRef, rate: RateRef, t0: float | None = None,
+                      t1: float | None = None, *, lock: int | None = None,
                       per_cycle: int = 720, low_hz: float | None = None,
                       high_hz: float | None = None, lock_hz: float = 4.0) -> CycleAverage:
         """The stretch's cycles averaged -- the time-synchronous average:
@@ -825,10 +904,11 @@ class Session:
         rows = dsp.cut_cycles(samples, cycles, per_cycle)
         return average_cycles(rows, float(np.median(at)))
 
-    def repetition_hz(self, x, t0=None, t1=None, *, min_hz: float, max_hz: float,
+    def repetition_hz(self, x: SignalRef, t0: float | None = None,
+                      t1: float | None = None, *, min_hz: float, max_hz: float,
                       low_hz: float | None = None, high_hz: float | None = None,
                       floor_hz: float = 60.0, guard_db: float = dsp.GUARD_DB,
-                      align=None) -> float:
+                      align: RateRef | None = None) -> float:
         """How often the stretch repeats, between `min_hz` and `max_hz`,
         from the autocorrelation of its lines -- as `frames.repetition_hz`
         takes it of a frame -- checked against half and double the rate.
@@ -840,10 +920,12 @@ class Session:
                                          low_hz=low_hz, high_hz=high_hz, floor_hz=floor_hz,
                                          guard_db=guard_db)[0])
 
-    def lines(self, x, t0=None, t1=None, *, low_hz: float = 0.0, high_hz: float | None = None,
-              prominence: float = 8.0, near=None, within: float = 1.5,
+    def lines(self, x: SignalRef, t0: float | None = None,
+              t1: float | None = None, *, low_hz: float = 0.0, high_hz: float | None = None,
+              prominence: float = 8.0, near: Sequence[float] | float | None = None,
+              within: float = 1.5,
               resolution_hz: float = 1.5, segment: int | None = None,
-              pad_to: int | None = None, floor_hz: float = 60.0, align=None,
+              pad_to: int | None = None, floor_hz: float = 60.0, align: RateRef | None = None,
               ref_hz: float | None = None) -> pd.DataFrame:
         """The lines of the stretch, a row each: `hz` (refined between
         bins), `prominence_db` over their neighbours, `over_floor_db`
@@ -875,7 +957,8 @@ class Session:
             columns = ["near", *columns]
         return pd.DataFrame(table, columns=columns)
 
-    def spectrum_summary(self, x, t0=None, t1=None, *, bands=(),
+    def spectrum_summary(self, x: SignalRef, t0: float | None = None,
+                         t1: float | None = None, *, bands: Bands = (),
                          taper: str = "hann") -> pd.Series:
         """The spectrum of the stretch in a few numbers: samples,
         resolution_hz, dominant_hz, centroid_hz, spread_hz, flatness,
@@ -886,8 +969,9 @@ class Session:
         return pd.Series(query.shape_of(frequency, amplitude, len(values), taper, bands),
                          name=values.name)
 
-    def audio(self, x, t0=None, t1=None, *, rate: int = 48000,
-              speed: float = 1.0, bands=None) -> np.ndarray:
+    def audio(self, x: SignalRef, t0: float | None = None,
+              t1: float | None = None, *, rate: int = 48000,
+              speed: float = 1.0, bands: Bands | None = None) -> np.ndarray:
         """The stretch of one signal as sound: float32 samples within
         -1..1 at `rate` per second, `speed` times as fast and as high.
         16-bit samples keep their level; anything outside -1..1 is
@@ -920,7 +1004,8 @@ class Session:
             raise query.NoOverlap("the two signals have too little time in common there")
         return time, xv, yv, rate
 
-    def correlation(self, x, y, t0=None, t1=None, *, max_lag=None,
+    def correlation(self, x: SignalRef, y: SignalRef, t0: float | None = None,
+                    t1: float | None = None, *, max_lag: Duration | None = None,
                     method: str = "phat") -> pd.Series:
         """How alike `y` is to `x` shifted by each lag, over the stretch:
         a Series indexed by lag (s), peaking at the lag `y` hears things
@@ -933,7 +1018,8 @@ class Session:
         return pd.Series(values, index=pd.Index(lags, name="lag_s"),
                          name=f"{_title(y)} vs {_title(x)}")
 
-    def delay(self, x, y, t0=None, t1=None, *, max_lag=None,
+    def delay(self, x: SignalRef, y: SignalRef, t0: float | None = None,
+              t1: float | None = None, *, max_lag: Duration | None = None,
               method: str = "phat") -> pd.Series:
         """When `y` hears what `x` does, over the stretch: `delay` (s;
         positive when `y` is later, between samples), `peak` (the
@@ -942,7 +1028,8 @@ class Session:
         lag, peak, snr = dsp.peak_lag(series.index.to_numpy(float), series.to_numpy(float))
         return pd.Series({"delay": lag, "peak": peak, "snr": snr}, name=series.name)
 
-    def coherence(self, x, y, t0=None, t1=None, *, segment: int = 256) -> pd.Series:
+    def coherence(self, x: SignalRef, y: SignalRef, t0: float | None = None,
+                  t1: float | None = None, *, segment: int = 256) -> pd.Series:
         """How much of `y` follows from `x` at each frequency, 0..1, over
         the stretch (Welch, over segments of `segment` samples)."""
         time, xv, yv, rate = self._pair(x, y, t0, t1)
@@ -997,7 +1084,8 @@ class Session:
             delays.append(dsp.peak_lag(lags, correlation)[0])
         return np.array(delays)
 
-    def direction(self, array, t0=None, t1=None, *, max_lag=None) -> pd.Series:
+    def direction(self, array: str | Array, t0: float | None = None,
+                  t1: float | None = None, *, max_lag: Duration | None = None) -> pd.Series:
         """Where a far sound came from, over the stretch: `azimuth_deg`
         (counter-clockwise from +x), `elevation_deg` (from the x-y plane;
         in 2-D how far off it, sign unknown), the unit vector, and the
@@ -1012,7 +1100,8 @@ class Session:
             found[f"u{axis}"] = float(value)
         return pd.Series(found, name="direction")
 
-    def locate(self, array, t0=None, t1=None, *, max_lag=None) -> pd.Series:
+    def locate(self, array: str | Array, t0: float | None = None,
+               t1: float | None = None, *, max_lag: Duration | None = None) -> pd.Series:
         """Where a near sound came from, over the stretch: `x`, `y` (and
         `z`) in the array's metres and the fit's `residual_s`, from the
         delay between every pair. Needs a microphone more than the
@@ -1025,7 +1114,8 @@ class Session:
         out.update(residual_s=found["residual_s"], pairs=found["pairs"])
         return pd.Series(out, name="position")
 
-    def direction_map(self, array, t0=None, t1=None, *, step_deg: float = 2.0,
+    def direction_map(self, array: str | Array, t0: float | None = None,
+                      t1: float | None = None, *, step_deg: float = 2.0,
                       elevation_deg: float = 0.0) -> pd.Series:
         """How strongly the array hears the stretch from each azimuth
         (steered response power, SRP-PHAT): 1 where every pair agrees,
@@ -1055,8 +1145,10 @@ class Session:
         self._cursor = self._clamp(self._cursor)
         self.notify("data", samples=0, t_end=self.span[1])
 
-    def estimate_sync(self, x, y, t0=None, t1=None, *, window="1s", max_lag="100ms",
-                      method: str = "phat", min_snr: float = 5.0):
+    def estimate_sync(self, x: SignalRef, y: SignalRef, t0: float | None = None,
+                      t1: float | None = None, *, window: Duration = "1s",
+                      max_lag: Duration = "100ms",
+                      method: str = "phat", min_snr: float = 5.0) -> SyncEstimate:
         """How late the clock of `y`'s stream is against `x`'s, from the
         delay over each `window` of the stretch -- claps, a played chirp,
         any sound both heard: offset at the windows' mean time, drift,
@@ -1084,8 +1176,11 @@ class Session:
         floor = 0.25 / max(self.rate_of(y), 1e-9)
         return query.fit_sync(windows, min_snr=min_snr, floor=floor, width=width)
 
-    def synchronize(self, x, y, t0=None, t1=None, *, window="1s", max_lag="100ms",
-                    method: str = "phat", min_snr: float = 5.0, min_windows: int = 3):
+    def synchronize(self, x: SignalRef, y: SignalRef, t0: float | None = None,
+                    t1: float | None = None, *, window: Duration = "1s",
+                    max_lag: Duration = "100ms",
+                    method: str = "phat", min_snr: float = 5.0,
+                    min_windows: int = 3) -> SyncEstimate:
         """Estimate how late `y`'s stream's clock is against `x`'s
         (`estimate_sync`) and correct it, so the two agree on when things
         happened. Refused, leaving the clock as it was, when fewer than
@@ -1115,7 +1210,7 @@ class Session:
         except KeyError:
             raise KeyError(f"no stream {name!r}; have {', '.join(self.signals.streams)}") from None
 
-    def rate_of(self, x) -> float:
+    def rate_of(self, x: SignalRef) -> float:
         """Samples per second of a signal, or of a recipe's result."""
         node, result = self._computed(x)
         return float(result.rate or self.rate)
@@ -1245,10 +1340,10 @@ class Session:
         return self._selection
 
     @selection.setter
-    def selection(self, span) -> None:
+    def selection(self, span: tuple[float, float] | None) -> None:
         self.set_selection(span)
 
-    def set_selection(self, span) -> None:
+    def set_selection(self, span: tuple[float, float] | None) -> None:
         if span is not None:
             t0, t1 = float(span[0]), float(span[1])
             span = (t0, t1) if t0 <= t1 else (t1, t0)
@@ -1278,7 +1373,8 @@ class Session:
                 return b
         raise KeyError(f"no band {name!r}; there are {[b.name for b in self._bands]}")
 
-    def add_band(self, low_hz, high_hz, name: str | None = None, *, on: bool = True) -> str:
+    def add_band(self, low_hz: float, high_hz: float, name: str | None = None, *,
+                 on: bool = True) -> str:
         """Add the band from `low_hz` to `high_hz`; returns its name,
         "band 1", "band 2"... unless one is given."""
         low, high = check_band(low_hz, high_hz)
@@ -1296,7 +1392,8 @@ class Session:
         self._bands_changed()
         return str(name)
 
-    def edit_band(self, name: str, *, low_hz=None, high_hz=None, on: bool | None = None,
+    def edit_band(self, name: str, *, low_hz: float | None = None,
+                  high_hz: float | None = None, on: bool | None = None,
                   rename: str | None = None) -> Band:
         """Change what is given of a band; returns it as it now is."""
         old = self.band(name)
@@ -1459,7 +1556,7 @@ class Session:
 
     # -- serving -------------------------------------------------------
 
-    def serve(self, path: str | None = None):
+    def serve(self, path: str | None = None) -> Path:
         """Answer the MCP tools on a local socket.
 
         Local only, read-only, and off until asked for. The path is
@@ -1479,7 +1576,7 @@ class Session:
             self._endpoint = None
 
     @property
-    def endpoint_path(self):
+    def endpoint_path(self) -> Path | None:
         return self._endpoint.path if self._endpoint is not None else None
 
     def __repr__(self) -> str:

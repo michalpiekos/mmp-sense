@@ -63,7 +63,7 @@ from .views import views
 from .audio import make_player
 from .bridge import SessionBridge
 from .console import make_console
-from .panes import Pane, SignalPane, SpectrogramPane, SpectrumPane
+from .panes import Pane, SignalPane, SpectrogramPane, SpectrumPane, XYPane
 from .panes.base import ALL_CHANNELS
 from .panes.spectrum_pane import PEAK_HOLD_S
 from .panes.base import QWIDGETSIZE_MAX
@@ -173,7 +173,8 @@ class MainWindow(QMainWindow):
         self.bridge.source_changed.connect(lambda _p: self._mark("source", "signals"))
         self.bridge.playback_changed.connect(self._playback_changed)
         self.bridge.intake_changed.connect(self._intake_changed)
-        self.bridge.plot_requested.connect(self._plot_requested)
+        self.bridge.chart_requested.connect(self._chart_requested)
+        self.bridge.plots_changed.connect(self._plots_changed)
         self.bridge.detections_changed.connect(lambda _p: self._mark("detections"))
         self.bridge.bands_changed.connect(lambda _p: self._mark("bands"))
 
@@ -456,6 +457,7 @@ class MainWindow(QMainWindow):
             "np": np,
             "session": self.session,
             "pd": pd,
+            "run": lambda path: mmp_sense.run_script(path, self.session),
             "show": self.session.show,
             "signal": mmp_sense.signal,
             "ui": self,
@@ -631,10 +633,13 @@ class MainWindow(QMainWindow):
         if name not in self.session.signals and self.session.members(name) is None:
             return
         self.focus_signal = name
-        for pane in self.panes:
+        for pane in self._signal_panes():
             if pane.signal == name:
                 return
         self.add_pane("signal", name)
+
+    def _signal_panes(self) -> list[Pane]:
+        return [p for p in self.panes if not isinstance(p, XYPane)]
 
     def _pane_retargeted(self, pane: Pane, name: str) -> None:
         if pane.time_axis and name in self.session.signals:
@@ -994,18 +999,31 @@ class MainWindow(QMainWindow):
         return self.op_form
 
     def _drop_signal(self, name: str) -> None:
-        for pane in [p for p in self.panes if p.signal == name]:
+        for pane in [p for p in self._signal_panes() if p.signal == name]:
             self.remove_pane(pane)
         try:
             self.session.hide(shown_name(self.session, name))
         except Exception as exc:                              # noqa: BLE001
             self.statusBar().showMessage(str(exc), 3000)
 
-    def _plot_requested(self, name: str, view) -> None:
+    def _chart_requested(self, name: str, view) -> None:
         if view:
             self.add_pane(view, name)
         else:
             self.plot_signal(name)
+
+    def _plots_changed(self, name: str) -> None:
+        exists = name in self.session.plots
+        panes = [p for p in self.panes if isinstance(p, XYPane)]
+        if not exists:
+            for pane in [p for p in panes if p.signal == name]:
+                self.remove_pane(pane)
+            panes = [p for p in panes if p.signal != name]
+        for pane in panes:
+            pane.update_choices()
+            pane.refresh({"plots"})
+        if exists and not any(p.signal == name for p in panes):
+            self.add_pane("xy", name)
 
     # -- shutting down -------------------------------------------------
 
