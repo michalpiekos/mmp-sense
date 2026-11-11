@@ -1133,6 +1133,30 @@ class Session:
 
     # -- clocks --------------------------------------------------------
 
+    def _recorded(self, key: str):
+        for source in self._sources():
+            series = getattr(source, "series", None)
+            if series is not None and key in series.metadata:
+                return series.metadata[key]
+        return None
+
+    def clocks(self) -> pd.DataFrame:
+        """The clocks the recording declared (a session exported by srv-senselab): id,
+        name, kind, hz, bits, whether it is the timeline, source and domain. Empty for
+        other files."""
+        clocks = self._recorded("clocks") or []
+        return pd.DataFrame(clocks, columns=["id", "name", "kind", "hz", "bits", "timeline",
+                                             "source", "domain"])
+
+    def clock_observations(self) -> pd.DataFrame:
+        """Every clock reading the recording holds, raw: `time` (session s), `kind`
+        (device, pong, arrival), `clock`, `value` (that clock's ticks), `uncertainty_ns`,
+        and `pps` and the gateway's UTC fields where the observation has them."""
+        table = self._recorded("clock_observations")
+        if table is None:
+            return pd.DataFrame(columns=["time", "kind", "clock", "value", "uncertainty_ns"])
+        return table.copy()
+
     def clock_of(self, stream: str) -> Clock | None:
         """The correction of a stream's clock, or None."""
         return self._stream(stream).buffer.clock

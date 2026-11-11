@@ -135,8 +135,18 @@ def build_server(backend, name: str = "mmp-sense"):
         return backend.call("get_delay", {"x": x, "y": y, "t0": t0, "t1": t1,
                                           "max_lag": max_lag, "method": method})
 
+    def get_clocks() -> dict:
+        """The clocks the recording declared: id, name, kind, hz, bits, timeline,
+        source and domain."""
+        return backend.call("get_clocks", {})
+
+    def get_clock_observations(clock: str | None = None, limit: int = 1000) -> dict:
+        """The recording's clock readings, raw, a row per reading: time (session s),
+        kind, clock, value (its ticks), uncertainty_ns, pps and the gateway's UTC."""
+        return backend.call("get_clock_observations", {"clock": clock, "limit": limit})
+
     for function in (get_current_context, list_signals, get_statistics, get_values,
-                     get_events, get_spectrum_summary, get_delay):
+                     get_events, get_spectrum_summary, get_delay, get_clocks, get_clock_observations):
         server.add_tool(function)
     return server
 

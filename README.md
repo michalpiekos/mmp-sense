@@ -51,6 +51,7 @@ mmp-sense table.tsv                         # a column per channel
 mmp-sense capture.npy --rate 400            # an array, with its sample rate
 mmp-sense bench.csv --replay --speed 2      # played back in time, twice as fast
 mmp-sense walk.mcap --topic /sensor/accelerometer --topic /sensor/gyroscope
+mmp-sense export/<session-id>              # a session srv-senselab exported with --raw: mics by name, its clocks
 ```
 
 The file is named on its own or with `--file`. Without `--replay` the

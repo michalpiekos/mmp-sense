@@ -121,6 +121,25 @@ drift_ppm, at)` sets one by hand: a sample stamped `t` happened at `t -
 offset - drift * (t - at)`. `python -m mmp_sense.examples.two_mics` shows it
 end to end.
 
+## Recorded clocks
+
+A session opened from a raw export of srv-senselab (`mmp_sense.load("DIR/<session-id>")`,
+see [the formats](formats.md)) carries the device's clocks as it recorded them:
+
+```python
+session.clocks()               # id, name, kind, hz, bits, timeline, source, domain
+session.clock_observations()   # a row per reading: time (session s), kind, clock,
+                               # value (that clock's ticks), uncertainty_ns, pps,
+                               # gateway_utc_ns, gateway_send_utc_ns, gateway_recv_utc_ns
+```
+
+`kind` is `device` (readings the device took at one instant: UTC against its
+monotonic clock, PPS edges), `pong` (the device's reading when a gateway ping
+arrived, between the gateway's send and receive UTC) or `arrival` (the
+gateway's UTC when a data message arrived, against its timestamp). Values are
+raw 64-bit integers, kept exactly; nothing is fitted or corrected. Other files
+have no recorded clocks: both are empty.
+
 ## Arrays: where a sound came from
 
 ```python
@@ -572,7 +591,7 @@ it and speaks MCP over stdio. The tools are
 ```
 get_current_context   list_signals   get_statistics
 get_values            get_events     get_spectrum_summary
-get_delay
+get_delay             get_clocks     get_clock_observations
 ```
 
 `get_current_context` and `list_signals` list the streams, each with

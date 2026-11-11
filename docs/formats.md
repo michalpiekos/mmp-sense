@@ -36,4 +36,20 @@ open as they are:
   unit, read from the file's name (`..._accelerometer_...` is m/s²), and
   the GNSS table with its gaps kept.
 
-Export manifests and annotation files are not read.
+- **A session folder of a raw export**: `sample export "<sql>" --out DIR --raw`
+  writes `DIR/manifest.json` and a folder per session; open the session's
+  folder, `mmp-sense DIR/<session-id>`.
+  - Each WAV stream becomes a stream named after it (`mics`), with its
+    channels' names: tetrahedral's mics are `S`, `N`, `W` and `E` (written
+    `mics:S` ... when the session has several streams). Sound is from -1
+    to 1; a sensor's counts times its `encoding.scale`.
+  - Time is the session's, in seconds from its start: each frame where its
+    `/audio/timing` point puts it, so frames lost in transit stay a gap in
+    time, at the right time. The MCAP's plottable topics (GNSS,
+    sensors) join as streams of their own.
+  - The declared clocks and every `/clock/observation` reading come along:
+    `session.clocks()` and `session.clock_observations()` ([the API](API.md#recorded-clocks)).
+  - The folder needs the export's `manifest.json` beside it. Video samples
+    are not read.
+
+Other export manifests and annotation files are not read.

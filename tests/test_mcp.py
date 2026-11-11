@@ -13,7 +13,7 @@ from mmp_sense.mcp.endpoint import Endpoint, EndpointClient, endpoints
 def test_the_tools_are_the_seven_questions():
     assert set(tools.TOOLS) == {
         "get_current_context", "list_signals", "get_statistics", "get_values",
-        "get_events", "get_spectrum_summary", "get_delay",
+        "get_events", "get_spectrum_summary", "get_delay", "get_clocks", "get_clock_observations",
     }
     for described in tools.describe_tools():
         assert described["description"]

@@ -150,6 +150,25 @@ def _delay(session, x: str, y: str, t0=None, t1=None, max_lag=None, method="phat
     return {"x": x, "y": y, "stretch": _stretch(session, t0, t1), **found.to_dict()}
 
 
+@_tool("get_clocks", "The clocks the recording declared (a session exported by "
+       "srv-senselab): id, name, kind, hz, bits, timeline, source, domain.")
+def _clocks(session):
+    return {"clocks": jsonable(session.clocks().to_dict("records"))}
+
+
+@_tool("get_clock_observations",
+       "The recording's clock readings, raw, a row per reading: time (session s), kind "
+       "(device, pong, arrival), clock, value (its ticks), uncertainty_ns, pps and the "
+       "gateway's UTC fields. Optionally only one `clock`, and at most `limit` rows.",
+       clock="a clock's name", limit="most rows to return")
+def _clock_observations(session, clock=None, limit=1000):
+    table = session.clock_observations()
+    if clock is not None:
+        table = table[table["clock"] == clock]
+    rows = table.head(int(limit)).astype(object).where(table.head(int(limit)).notna(), None)
+    return {"rows": len(table), "observations": jsonable(rows.to_dict("records"))}
+
+
 def describe_tools() -> list[dict]:
     return [spec.describe() for spec in TOOLS.values()]
 

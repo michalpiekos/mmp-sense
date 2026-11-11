@@ -5,6 +5,7 @@
     read_file("accel.wav", scale=0.0024)   a sensor's WAV, in m/s^2
     read_file("table.tsv")                 a column per channel
     read_file("capture.npy", rate=400)     an array, with its rate
+    read_file("export/<session>")          a session srv-senselab exported with --raw
 
 The format is told by the file's first bytes where it has a signature
 (MCAP, WAV, NumPy), else by its suffix, else -- text -- as delimited
@@ -21,6 +22,7 @@ from .arrays import NUMPY_SUFFIXES, read_numpy
 from .audio import AUDIO_SUFFIXES, is_sensor_wav, read_audio, read_sensor_wav
 from .csv import TEXT_SUFFIXES, read_timeseries
 from .mcap import MAGIC, plottable_topics, read_mcap, read_mcap_topics, topics_in
+from .session_export import is_session_folder, read_session_folder
 
 __all__ = ["read_file", "kind_of", "FileFormatError", "FILE_KINDS"]
 
@@ -31,6 +33,7 @@ FILE_KINDS = {
     "audio": "compressed audio, decoded by ffmpeg",
     "array": "a NumPy .npy or .npz",
     "text": "delimited text: CSV, TSV, whitespace",
+    "session": "a session folder of `sample export --raw`: its streams, mic names and clocks",
 }
 
 #: srv-senselab's clip export names its files <session>_<stream>_<span>.
@@ -48,6 +51,8 @@ class FileFormatError(ValueError):
 def kind_of(path: str | Path) -> str:
     """Which reader a file goes to; one of FILE_KINDS."""
     path = Path(path)
+    if is_session_folder(path):
+        return "session"
     suffix = path.suffix.lower()
     try:
         with open(path, "rb") as file:
@@ -93,6 +98,8 @@ def read_file(
     """
     path = Path(path)
     kind = kind_of(path)
+    if kind == "session":
+        return read_session_folder(path)
     if topics and kind != "mcap":
         raise ValueError(f"{path.name} holds one stream; topics are an MCAP's")
     if kind == "mcap":
