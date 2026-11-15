@@ -35,10 +35,10 @@ def test_a_loaded_series_is_held_whole_past_the_live_cap(small_cap):
 def test_a_file_opened_in_the_window_is_held_whole(small_cap, tmp_path):
     from scipy.io import wavfile
 
-    from mmp_sense.ui.app import build_session, parse_args
+    from mmp_sense.ui.app import build, parse_args
 
     wavfile.write(tmp_path / "long.wav", 8000, np.ones(8000 * 3, dtype=np.int16))
-    session = build_session(parse_args(["--file", str(tmp_path / "long.wav")]))
+    session = build(parse_args(["--file", str(tmp_path / "long.wav")]))[0]
     session.poll()
     assert len(session.buffer) == 8000 * 3 > small_cap
 

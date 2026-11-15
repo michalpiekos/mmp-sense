@@ -21,7 +21,7 @@ from scipy.io import wavfile
 from ..core.data import TimeSeries
 
 __all__ = ["read_audio", "read_sensor_wav", "is_sensor_wav", "AUDIO_SUFFIXES",
-           "AudioError", "SENSOR_RATE_BELOW", "wav_rate"]
+           "AudioError", "SENSOR_RATE_BELOW", "wav_rate", "wav_format"]
 
 #: Suffixes opened as audio; all but .wav need ffmpeg.
 AUDIO_SUFFIXES = frozenset({
@@ -70,6 +70,12 @@ def is_sensor_wav(path) -> bool:
 
 def wav_rate(path) -> int | None:
     """A WAV's sample rate from its `fmt ` chunk; None if it is not one."""
+    fmt = wav_format(path)
+    return fmt[0] if fmt else None
+
+
+def wav_format(path) -> tuple[int, int] | None:
+    """A WAV's (sample rate, channels) from its `fmt ` chunk; None if it is not one."""
     try:
         with open(path, "rb") as file:
             head = file.read(12)
@@ -82,7 +88,9 @@ def wav_rate(path) -> int | None:
                 size = int.from_bytes(chunk[4:], "little")
                 if chunk[:4] == b"fmt ":
                     fmt = file.read(8)
-                    return int.from_bytes(fmt[4:8], "little") if len(fmt) == 8 else None
+                    if len(fmt) < 8:
+                        return None
+                    return int.from_bytes(fmt[4:8], "little"), int.from_bytes(fmt[2:4], "little")
                 file.seek(size + (size & 1), 1)
     except OSError:
         return None

@@ -118,6 +118,8 @@ class MainWindow(QMainWindow):
         listen: bool | str = False,
         peak_hold_s: float = PEAK_HOLD_S,
         player=None,
+        workspace=None,
+        shown=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -159,6 +161,10 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_brand()
         self._build_docks(console)
+        from .workspace_control import WorkspaceControl
+
+        #: The File menu and the Workspace dock: `workspace` and the recording `shown` of it.
+        self.files = WorkspaceControl(self, workspace, shown)
         # Empty until a band is added, which opens it.
         self.set_dock_collapsed(self.bands_dock, True)
         if hasattr(self, "console_dock"):

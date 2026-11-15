@@ -508,23 +508,22 @@ def test_topics_are_an_mcaps_only(tmp_path):
 
 
 def test_the_window_opens_a_file_named_on_its_own(tmp_path, phone):
-    from mmp_sense.ui.app import build_session, parse_args
+    from mmp_sense.ui.app import build, parse_args
 
     path = tmp_path / "sample.mcap"
     path.write_bytes(phone.close())
-    session = build_session(parse_args([str(path)]))
+    session = build(parse_args([str(path)]))[0]
     assert list(session.streams) == ["gnss", "accelerometer", "gyroscope"]
-    session = build_session(parse_args(["--file", str(path), "--topic",
-                                        "/sensor/gyroscope"]))
+    session = build(parse_args(["--file", str(path), "--topic", "/sensor/gyroscope"]))[0]
     assert session.dataset == "/sensor/gyroscope"
 
 
 def test_the_window_takes_a_sensor_wavs_scale(tmp_path):
-    from mmp_sense.ui.app import build_session, parse_args
+    from mmp_sense.ui.app import build, parse_args
 
     wavfile.write(tmp_path / "g.wav", 200, np.full((400, 3), 1000, dtype=np.int16))
-    session = build_session(parse_args([str(tmp_path / "g.wav"), "--scale", "0.001",
-                                        "--units", "rad/s"]))
+    session = build(parse_args([str(tmp_path / "g.wav"), "--scale", "0.001",
+                                "--units", "rad/s"]))[0]
     assert session.values("x").iloc[0] == pytest.approx(1.0)
 
 
@@ -536,12 +535,13 @@ def test_a_file_is_named_once(tmp_path):
 
 
 def test_the_window_shows_a_phone_recording(tmp_path, phone, qapp):
-    from mmp_sense.ui.app import build_session, parse_args
+    from mmp_sense.ui.app import build, parse_args
     from mmp_sense.ui.main_window import MainWindow
 
     path = tmp_path / "sample.mcap"
     path.write_bytes(phone.close())
-    window = MainWindow(build_session(parse_args([str(path)])))
+    session, workspace, shown = build(parse_args([str(path)]))
+    window = MainWindow(session, workspace=workspace, shown=shown)
     window.tick()
     assert window.windowTitle().startswith("mmp-sense -- ")
     assert len(window.session.streams["accelerometer"].buffer) == 100

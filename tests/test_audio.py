@@ -135,33 +135,33 @@ def test_graph_ops_work_on_audio(tmp_path):
 
 
 def test_the_window_holds_all_of_a_long_file(tmp_path):
-    from mmp_sense.ui.app import build_session, parse_args
+    from mmp_sense.ui.app import build, parse_args
 
     rate = 8000
     wavfile.write(tmp_path / "long.wav", rate, np.zeros(90 * rate, dtype=np.int16) + 1)
-    session = build_session(parse_args(["--file", str(tmp_path / "long.wav")]))
+    session = build(parse_args(["--file", str(tmp_path / "long.wav")]))[0]
     session.poll()
     assert session.buffer.duration == pytest.approx(90, abs=0.01)
     assert session.buffer.rate == pytest.approx(8000)
 
 
 def test_a_long_csv_is_held_whole_too(tmp_path):
-    from mmp_sense.ui.app import build_session, parse_args
+    from mmp_sense.ui.app import build, parse_args
 
     t = np.arange(0, 90, 0.01)
     (tmp_path / "long.csv").write_text(
         "time,v\n" + "\n".join(f"{x:.2f},0" for x in t) + "\n")
-    session = build_session(parse_args(["--file", str(tmp_path / "long.csv")]))
+    session = build(parse_args(["--file", str(tmp_path / "long.csv")]))[0]
     session.poll()
     assert session.buffer.duration == pytest.approx(89.99, abs=0.02)
 
 
 def test_the_window_looks_at_the_sound_itself(tmp_path, qapp):
     pytest.importorskip("PySide6")
-    from mmp_sense.ui.app import build_session, parse_args
+    from mmp_sense.ui.app import build, parse_args
     from mmp_sense.ui.main_window import MainWindow
 
-    session = build_session(parse_args(["--file", str(write_wav(tmp_path / "t.wav", two_tones()))]))
+    session = build(parse_args(["--file", str(write_wav(tmp_path / "t.wav", two_tones()))]))[0]
     window = MainWindow(session, window_s=10.0, console=False)
     try:
         assert window.focus_signal == "ch0"

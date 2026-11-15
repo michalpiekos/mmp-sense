@@ -6,6 +6,7 @@
     mmp-sense accel.wav --scale 0.0024 --units m/s^2   a sensor's WAV
     mmp-sense table.tsv                     delimited text, a column per channel
     mmp-sense capture.npy --rate 400        an array, with its sample rate
+    mmp-sense field-day/                    a workspace folder, its first recording shown
     mmp-sense                               a simulated accelerometer
     mmp-sense FILE --replay                 a file, played back in time
     mmp-sense --serve                       answerable by an MCP server
@@ -17,20 +18,24 @@ from __future__ import annotations
 import argparse
 import sys
 
-__all__ = ["main", "build_session"]
+__all__ = ["main", "build"]
 
 #: The simulated accelerometer's rate unless --rate gives one.
 SIMULATED_RATE = 1000.0
 
 
-def build_session(args):
-    """The session the window will show."""
+def build(args):
+    """The session the window will show, its workspace, and the recording
+    of it shown (None for simulated data)."""
     from ..core.session import Session, stream_names
+    from ..workspace import Workspace, is_workspace
 
+    path = args.path or args.file
+    if path and is_workspace(path):
+        return _workspace_session(Workspace.open(path))
     topics = [t for t in (args.topic or []) if t]
     buffer_s = args.buffer
     max_samples = None
-    path = args.path or args.file
     if path:
         from ..sources.recording import FileSources
 
@@ -51,7 +56,29 @@ def build_session(args):
         session.add(source, name)
     session.start()
     session.poll()
-    return session
+    workspace = Workspace.untitled()
+    shown = None
+    if path:
+        shown = workspace.add(path, series=[s.series for s in sources], topics=topics,
+                              rate=args.rate, scale=args.scale, units=args.units)
+    return session, workspace, shown
+
+
+def _workspace_session(workspace):
+    from ..core.session import Session
+    from ..io.files import read_file
+    from ..sources.synthetic import SyntheticAccelerometer
+    from ..workspace.loading import load_into
+
+    session = Session()
+    if not workspace.recordings:
+        session.add(SyntheticAccelerometer(rate=SIMULATED_RATE))
+        session.start()
+        session.poll()
+        return session, workspace, None
+    shown = workspace.recordings[0]
+    load_into(session, read_file(workspace.path_of(shown), **shown.options))
+    return session, workspace, shown
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -61,8 +88,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("path", nargs="?", metavar="FILE",
                         help="a data file to open: MCAP, WAV or other audio (m4a, mp3, "
-                             "ogg... with ffmpeg), CSV/TSV, or NumPy .npy/.npz; "
-                             "without one, simulated data")
+                             "ogg... with ffmpeg), CSV/TSV, or NumPy .npy/.npz; or a "
+                             "workspace folder; without one, simulated data")
     parser.add_argument("--file", help="the same, as an option")
     parser.add_argument("--topic", action="append", default=[],
                         help="an MCAP topic to open; again for another beside it, on "
@@ -120,7 +147,7 @@ def main(argv=None) -> int:
     application.setApplicationName("mmp-sense")
     application.setDesktopFileName("mmp-sense")
     try:
-        session = build_session(args)
+        session, workspace, shown = build(args)
     except Exception as exc:                                  # noqa: BLE001
         # A KeyError's message would print inside quotes.
         message = exc.args[0] if isinstance(exc, KeyError) and exc.args else exc
@@ -139,6 +166,8 @@ def main(argv=None) -> int:
         window_s=args.window,
         listen=args.listen,
         peak_hold_s=args.peak_hold,
+        workspace=workspace,
+        shown=shown,
     )
     if window.listener is not None:
         print(f"mmp-sense: running code sent to {window.listener.path}", file=sys.stderr)

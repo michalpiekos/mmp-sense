@@ -53,3 +53,25 @@ open as they are:
     are not read.
 
 Other export manifests and annotation files are not read.
+
+## A workspace folder
+
+`mmp-sense FOLDER` opens a workspace folder ([the window](window.md#the-menus-and-the-workspace-dock)):
+
+```text
+FOLDER/
+  workspace.json
+  recordings/<recording-id>/<file>     the file as it was opened, byte for byte
+```
+
+`workspace.json` holds `format: "mmp-sense-workspace"`, `schema_version: 1`,
+the workspace's `id`, `title` and `notes`, the `server` it was sent to,
+and a `recordings` list. Each recording has its `id`, file `name` and
+`kind`, `title`, `tags`, `notes`, `started_at_utc`, `duration_s`, the
+read `options` (topics, rate, scale, units), `origin` (`file`, or
+`server` for a srv-senselab export) and its `sync` state with the
+server: the capture session and sample identities, what was declared,
+uploaded and closed, and the context revision sent. No token is ever
+written there. A srv-senselab export is kept with its `manifest.json`
+beside it.
+

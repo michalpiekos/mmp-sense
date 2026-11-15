@@ -64,6 +64,29 @@ its topic, and its channels `stream:channel` (`accelerometer:x`).
 Which formats open, and what each becomes -- srv-senselab's files
 included -- is in [doc/formats.md](doc/formats.md).
 
+## Keep recordings in a workspace
+
+```sh
+mmp-sense knock.wav                          # opens in an untitled workspace
+mmp-sense ~/field-day                        # a workspace folder
+```
+
+In the window, **File → Create workspace** puts the workspace in a
+folder, **Open** adds more files, **Save all** copies them in, and
+**Synchronize** sends them, with their titles, tags and notes, to
+srv-senselab. Set the server once in **Edit → Settings**: its address,
+and the token file of a source made for mmp-sense:
+
+```sh
+docker exec sample sample source create --type import --name "mmp-sense" --token-file /data/out/mmp-sense.token
+```
+
+Copy that file (from `/srv/senselab/out/` on the server) to your
+machine and name it in Settings. **Save workspace as** makes a whole
+copy to trim or cut down, sent as sessions of its own. The menus and the
+dock are in [docs/window.md](docs/window.md#the-menus-and-the-workspace-dock),
+the folder in [docs/formats.md](docs/formats.md#a-workspace-folder).
+
 ## Watch a simulated accelerometer
 
 ```sh
@@ -271,7 +294,7 @@ lets pyright and mypy find `mmp_sense` from any directory.
 
 | Option | Meaning |
 |---|---|
-| `FILE`, `--file FILE` | A data file to open; see [the formats](doc/formats.md). Without one, a simulated accelerometer. |
+| `FILE`, `--file FILE` | A data file or a workspace folder to open; see [the formats](docs/formats.md). Without one, a simulated accelerometer. |
 | `--topic TOPIC` | An MCAP topic to open; again for another beside it. Default: every plottable one. |
 | `--replay`, `--speed N` | Play a file back in time, at N times its own rate. |
 | `--rate HZ` | Sample rate of a file that carries no time (an array, a table without a time column); otherwise of the simulated source, default 1000. |

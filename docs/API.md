@@ -582,6 +582,26 @@ source.knock(amplitude=5.0)
 source.event_spans()                 # the ground truth, for judging one
 ```
 
+## Workspaces
+
+What the File menu does is in `mmp_sense.workspace`, for scripts too:
+
+```python
+from mmp_sense.workspace import Workspace, sync
+
+ws = Workspace.create("~/field-day", "Field day")   # a new, empty folder
+knock = ws.add("knock.wav")                        # kept where it is until saved
+knock.tags = ["kind:knock", "env:door"]
+ws.save_all()                                      # copies it in, writes workspace.json
+ws = Workspace.open("~/field-day")
+results = sync.synchronize(ws, sync.Client("http://192.168.1.2:8080", token))
+[(r.recording.label, r.outcome) for r in results]  # sent, context, up to date, skipped, failed
+```
+
+`ws.save_as(folder)` copies everything to a new workspace, with new
+identities, and carries on there. `synchronize` saves the workspace after
+each recording, so a run cut short continues where it stopped.
+
 ## MCP
 
 `session.serve()` opens a Unix socket under `$XDG_RUNTIME_DIR/mmp-sense`,

@@ -68,3 +68,49 @@ session is the one to explore. Start throws that away and captures again
 from an empty buffer, so what was on screen is gone; the file is what
 keeps data for good. Neither is Play, which moves the cursor through
 what is already held.
+
+## The menus and the Workspace dock
+
+The window always works in a **workspace**: recordings kept together
+with their metadata, which can be sent to srv-senselab. It starts
+untitled, holding the file named on the command line, if any.
+
+| File menu | What it does |
+|---|---|
+| **New** | Not yet: a recording to stream into |
+| **Open...** (`Ctrl+O`) | Add a file, or a srv-senselab session folder (its `capture_session.json` too), to the workspace and show it |
+| **Open workspace...** | Work on a workspace folder; its first recording is shown |
+| **Create workspace...** | Put the workspace in a new, empty folder, with a title. An untitled one goes there with what it holds; otherwise a new, empty one starts |
+| **Save** (`Ctrl+S`) | Copy the shown recording into the workspace folder, byte for byte |
+| **Save workspace** | Write the workspace's title and the metadata of its saved recordings |
+| **Save workspace as...** | Copy everything to another empty folder as a new workspace, with new identities, and work on the copy. The copy is sent as sessions of its own |
+| **Save all** (`Ctrl+Shift+S`) | Save every recording, then the workspace |
+| **Synchronize** | Send the saved recordings and their metadata to srv-senselab |
+
+Saving into an untitled workspace asks for a folder first.
+
+**Edit → Settings...** holds, for every window, the srv-senselab
+address Synchronize sends to (such as `http://192.168.1.2:8080`) and,
+optionally, the **token file**: the file `sample source create
+--token-file` writes. With a token file, the token is read from it each
+time. Without one, the first Synchronize asks for a source token and
+remembers it, only for you (`~/.config/mmp-sense/credentials.json`), and
+forgets it when the server refuses it.
+
+Synchronize runs in the background; the status bar shows its progress
+and a summary follows. Each recording becomes one capture session on the
+server, sent once:
+
+- what was sent is never sent again, and an interrupted upload resumes;
+- edited title, tags or notes are sent again on their own;
+- a folder exported from srv-senselab, and recordings not saved yet, are
+  skipped;
+- a workspace sent to one server is not sent to another: use **Save
+  workspace as** for a copy to send there.
+
+The **Workspace** dock lists the recordings, marked `unsaved`, `on the
+server` or `from the server`; click one to show it. Below the list are
+the chosen recording's **Title**, **Tags** (comma separated, such as
+`kind:knock, env:door`), **Started** (UTC, fixed once on the server) and
+**Notes**, edited in place and kept with **Save workspace**.
+
