@@ -127,3 +127,15 @@ def test_a_folder_without_its_manifest_says_so(export):
     (export.parent / "manifest.json").unlink()
     with pytest.raises(ValueError, match="manifest.json"):
         read_file(export)
+
+
+def test_jittery_timing_points_keep_time_increasing(export):
+    """tetra1 stamps its points when a block arrives, so they jitter by a few ms around 48 kHz;
+    LOT3AN on 2026-11-15 had a point 2.1 ms earlier than its predecessor's run predicted."""
+    from mmp_sense.io import session_export as se
+
+    points = [(0, 0.0, False), (12_000, 0.250001, False), (24_480, 0.51186, False), (36_480, 0.7598, False)]
+    t = se._frame_times(0, 48_000, RATE, 0.0, points)
+    assert np.all(np.diff(t) >= 0), "time never steps back"
+    assert t[24_480] == pytest.approx(0.51186) and t[36_480] == pytest.approx(0.7598)
+    assert t[-1] == pytest.approx(0.7598 + 11_519 / RATE), "past the last point, at the rate"

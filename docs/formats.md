@@ -45,7 +45,9 @@ open as they are:
     to 1; a sensor's counts times its `encoding.scale`.
   - Time is the session's, in seconds from its start: each frame where its
     `/audio/timing` point puts it, so frames lost in transit stay a gap in
-    time, at the right time. The MCAP's plottable topics (GNSS,
+    time, at the right time. Frames between two points are spread evenly
+    from one to the next, so a node whose points jitter by a few ms never
+    steps back in time. The MCAP's plottable topics (GNSS,
     sensors) join as streams of their own.
   - The declared clocks and every `/clock/observation` reading come along:
     `session.clocks()` and `session.clock_observations()` ([the API](API.md#recorded-clocks)).

@@ -48,15 +48,15 @@ def _declarations(folder: Path, session_id: str) -> list[dict]:
     raise ValueError(f"{manifest}: no capture session {session_id}")
 
 
-def _timing(mcaps: list[Path]) -> dict[str, list[tuple[int, float]]]:
-    """Per WAV sample id, its timing points: (first frame, session seconds)."""
-    points: dict[str, list[tuple[int, float]]] = {}
+def _timing(mcaps: list[Path]) -> dict[str, list[tuple[int, float, bool]]]:
+    """Per WAV sample id, its timing points: (first frame, session seconds, after a loss)."""
+    points: dict[str, list[tuple[int, float, bool]]] = {}
     for path in mcaps:
         for _t, payload in _collect(path, [TIMING_TOPIC])[TIMING_TOPIC]:
             try:
                 p = json.loads(payload)
                 points.setdefault(str(p["audio_sample_id"]).lower(), []).append(
-                    (int(p["first_frame"]), float(p["session_ns"]) / 1e9))
+                    (int(p["first_frame"]), float(p["session_ns"]) / 1e9, bool(p.get("discontinuity"))))
             except (ValueError, KeyError, TypeError):
                 continue
     for v in points.values():
@@ -65,17 +65,22 @@ def _timing(mcaps: list[Path]) -> dict[str, list[tuple[int, float]]]:
 
 
 def _frame_times(first_frame: int, frames: int, rate: float, start_s: float, points) -> np.ndarray:
-    """Session time of each frame: the latest timing point at or before it, plus the frames
-    since at the rate; without points, linear from the sample's start."""
-    k = first_frame + np.arange(frames)
+    """Session time of each frame: interpolated between the timing points around it, so time keeps
+    increasing although a device's points jitter by a few ms; at the rate from the last point
+    before a loss or the end; without points, linear from the sample's start."""
+    k = (first_frame + np.arange(frames)).astype(float)
     if not points:
         return start_s + (k - first_frame) / rate
-    at = np.array([p[0] for p in points])
-    t = np.array([p[1] for p in points])
+    at = np.array([p[0] for p in points], dtype=float)
+    t = np.array([p[1] for p in points], dtype=float)
+    lost = np.array([p[2] for p in points], dtype=bool)
     i = np.searchsorted(at, k, side="right") - 1
     before = i < 0
     i = np.clip(i, 0, len(at) - 1)
     out = t[i] + (k - at[i]) / rate
+    j = np.minimum(i + 1, len(at) - 1)
+    run = (at[j] > at[i]) & ~lost[j]
+    out[run] = t[i[run]] + (k[run] - at[i[run]]) * (t[j[run]] - t[i[run]]) / (at[j[run]] - at[i[run]])
     out[before] = (start_s + (k - first_frame) / rate)[before]
     return out
 
