@@ -21,7 +21,7 @@ from scipy.io import wavfile
 from ..core.data import TimeSeries
 
 __all__ = ["read_audio", "read_sensor_wav", "is_sensor_wav", "AUDIO_SUFFIXES",
-           "AudioError", "SENSOR_RATE_BELOW", "wav_rate", "wav_format"]
+           "AudioError", "SENSOR_RATE_BELOW", "wav_rate", "wav_format", "write_wav", "WAV_BITS"]
 
 #: Suffixes opened as audio; all but .wav need ffmpeg.
 AUDIO_SUFFIXES = frozenset({
@@ -60,6 +60,37 @@ def read_audio(path, *, decoder: str | None = None) -> TimeSeries:
         metadata={"source": str(path), "source_rate": rate,
                   "source_channels": count, "decoder": decoder},
     )
+
+
+#: Bits a sample of each format takes in a WAV, and whether it is a float.
+WAV_BITS = {"u8": (8, False), "s16": (16, False), "s24": (24, False), "s32": (32, False),
+            "f32": (32, True), "f64": (64, True)}
+_GUID_TAIL = bytes.fromhex("000000001000800000aa00389b71")
+
+
+def write_wav(path, frames: bytes, *, rate: int, channels: int, fmt: str,
+              valid_bits: int | None = None) -> None:
+    """Writes interleaved `frames`, already in `fmt`, as they are. More than two
+    channels, or fewer valid bits than the container holds, make it
+    WAVE_FORMAT_EXTENSIBLE, which keeps the valid bits."""
+    bits, is_float = WAV_BITS[fmt]
+    block = channels * bits // 8
+    if len(frames) % block:
+        raise ValueError(f"{len(frames)} bytes are not whole {block}-byte frames")
+    valid = valid_bits or bits
+    tag = 3 if is_float else 1
+    extensible = channels > 2 or valid != bits
+    fmt_body = (tag if not extensible else 0xFFFE).to_bytes(2, "little") + channels.to_bytes(2, "little") \
+        + int(rate).to_bytes(4, "little") + (int(rate) * block).to_bytes(4, "little") \
+        + block.to_bytes(2, "little") + bits.to_bytes(2, "little")
+    if extensible:
+        fmt_body += (22).to_bytes(2, "little") + valid.to_bytes(2, "little") + (0).to_bytes(4, "little") \
+            + tag.to_bytes(2, "little") + _GUID_TAIL
+    pad = b"\0" if len(frames) & 1 else b""
+    chunks = b"fmt " + len(fmt_body).to_bytes(4, "little") + fmt_body \
+        + b"data" + len(frames).to_bytes(4, "little") + frames + pad
+    with open(path, "wb") as file:
+        file.write(b"RIFF" + (4 + len(chunks)).to_bytes(4, "little") + b"WAVE" + chunks)
 
 
 def is_sensor_wav(path) -> bool:

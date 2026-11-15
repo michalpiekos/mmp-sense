@@ -114,3 +114,41 @@ the chosen recording's **Title**, **Tags** (comma separated, such as
 `kind:knock, env:door`), **Started** (UTC, fixed once on the server) and
 **Notes**, edited in place and kept with **Save workspace**.
 
+## Live streams
+
+**File → Open stream...** asks a gateway relay which streams are open --
+the relay is in **Edit → Settings** (`Live streams from`; by default the
+server's host, port 8091) and can be changed in the dialog. The token
+Synchronize uses goes only to a relay on the server's host, or on this
+machine (`ssh -L 8091:127.0.0.1:8091 server`); a laptop's gateway needs
+none. Tick the
+streams to watch and press **Watch**. They replace what the window
+showed: a chart per stream, all its channels drawn together (tetra:
+`S`, `N`, `W`, `E`), then the spectrum and spectrogram of the first.
+Showing a recording of the workspace again stops watching.
+
+All the streams share one time axis: seconds from a UTC second near the
+first one's start. Each stream is placed by the UTC its node reports
+against its own clock (tetra: NTP, ±20 ms; GNSS with PPS would be far
+closer), or, without that, by when its data reached the gateway
+(±100 ms). Within a stream, samples are timed by the node's sample
+counter, so a lost block is a gap at the right time.
+
+The **Live streams** dock lists the streams: whether each is live or
+ended (and why: `clean`, `link_lost`, ...), the frames lost, where its
+timing comes from and how sure it is, and its trim. **Trim** moves the
+chosen stream later (or, negative, earlier) by hand; `session.synchronize`
+in the console does it from a sound both streams heard. **Close** stops
+watching the chosen stream. Each stream keeps the last two minutes
+(`Keep of each live stream` in Settings, at most ten; a 4-microphone
+node takes about 1.5 MB a second of it).
+
+**File → Save selection to workspace** keeps the selection (shift-drag)
+of every stream as a recording of the workspace, not saved yet: a WAV
+in the node's own sample format with its channel names, its UTC start
+and the clock it was timed by. A selection across frames lost in transit
+becomes one recording each side of the gap. Until saved, the files wait
+in `~/.cache/mmp-sense/fragments`. **Save all** and **Synchronize** then
+treat it as any other recording; on srv-senselab it is a session with
+those channel names and that clock.
+

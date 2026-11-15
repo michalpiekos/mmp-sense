@@ -193,12 +193,27 @@ def _session(workspace: Workspace, recording: Recording) -> dict:
         "schema_version": 1,
         "capture_session_id": recording.sync.capture_session_id,
         "started_at_utc": recording.started_at_utc,
-        "clock": {"source": "unknown"},
+        "clock": _clock(recording),
         "trigger": {"type": "manual", "reason": "mmp-sense workspace"},
         "device": {"software": "mmp-sense", "version": __version__},
         "metadata": {"workspace_id": workspace.id, "recording_id": recording.id,
-                     "file_name": recording.name},
+                     "file_name": recording.name,
+                     **({"live": {k: recording.meta[k] for k in ("node", "relayed_session", "stream")
+                                  if k in recording.meta}} if recording.meta.get("relayed_session") else {})},
     }
+
+
+def _clock(recording: Recording) -> dict:
+    """What the start was taken from: a live fragment's UTC clock, else not known."""
+    clock = recording.meta.get("clock") or {}
+    if not clock.get("source"):
+        return {"source": "unknown"}
+    out = {"source": clock["source"]}
+    if clock.get("uncertainty_ns") is not None:
+        out["uncertainty_ns"] = int(clock["uncertainty_ns"])
+    if clock.get("domain"):
+        out["domain"] = clock["domain"]
+    return out
 
 
 def _duration_ns(recording: Recording) -> int:
@@ -223,6 +238,13 @@ def declaration_of(recording: Recording, path: Path) -> dict:
         sensor = rate < SENSOR_RATE_BELOW or recording.options.get("scale") is not None
         media_type, modality = "audio/wav", "other" if sensor else "audio"
         encoding = {"container": "wav", "sample_rate_hz": rate, "channels": channels}
+        meta = recording.meta
+        if meta.get("channel_names") and len(meta["channel_names"]) == channels:
+            encoding["channel_names"] = list(meta["channel_names"])
+        if meta.get("sample_format"):
+            encoding["sample_format"] = meta["sample_format"]
+            if meta.get("valid_bits"):
+                encoding["valid_bits"] = int(meta["valid_bits"])
     elif recording.kind == "mcap":
         media_type, modality = "application/x-mcap", "multi"
         encoding = {"container": "mcap"}

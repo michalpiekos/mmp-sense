@@ -66,9 +66,8 @@ def build(args):
 
 def _workspace_session(workspace):
     from ..core.session import Session
-    from ..io.files import read_file
     from ..sources.synthetic import SyntheticAccelerometer
-    from ..workspace.loading import load_into
+    from ..workspace.loading import load_into, series_of
 
     session = Session()
     if not workspace.recordings:
@@ -77,7 +76,7 @@ def _workspace_session(workspace):
         session.poll()
         return session, workspace, None
     shown = workspace.recordings[0]
-    load_into(session, read_file(workspace.path_of(shown), **shown.options))
+    load_into(session, series_of(workspace, shown))
     return session, workspace, shown
 
 

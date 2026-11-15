@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QFileDialog, QInputDialog, QLineEdit, QMessageBox
 from ..settings import Settings
 from ..workspace import Workspace, WorkspaceError
 from ..workspace import sync as syncing
-from ..workspace.loading import load_into
+from ..workspace.loading import load_into, series_of
 from ..io.session_export import SESSION_FILE
 from .widgets import WorkspaceDock
 
@@ -318,14 +318,15 @@ class WorkspaceControl(QObject):
     def _show(self, recording, series=None) -> None:
         try:
             if series is None:
-                from ..io.files import read_file
-
-                series = read_file(self.workspace.path_of(recording), **recording.options)
+                series = series_of(self.workspace, recording)
             self.window.player.stop(quietly=True)
+            watching = self.window.live.leave()
             load_into(self.window.session, series)
         except Exception as exc:                              # noqa: BLE001
             self.tell("Open", f"{recording.label}: {exc}", problem=True)
             return
+        if watching:
+            self.window.live.restore_panes()
         self.shown = recording
         self.window.focus_signal = self.window.session.channels[0]
         self.window._mark("source", "signals", "data", "cursor", "selection")

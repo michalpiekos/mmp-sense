@@ -82,6 +82,9 @@ class Recording:
     #: The capture session an export came from.
     server_session_id: str | None = None
     sync: SyncState = field(default_factory=SyncState)
+    #: What the file cannot say itself: for a live fragment, its channel names,
+    #: sample format, node, relayed session and clock.
+    meta: dict = field(default_factory=dict)
     #: Where the bytes are read from until saved into a workspace.
     source: Path | None = field(default=None, compare=False)
 

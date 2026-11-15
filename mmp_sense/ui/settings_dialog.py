@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -34,18 +35,31 @@ class SettingsDialog(QDialog):
         token_row = QHBoxLayout()
         token_row.addWidget(self.token_file, 1)
         token_row.addWidget(browse)
+        self.relay = QLineEdit(settings.relay)
+        self.relay.setPlaceholderText(f"{settings.relay_address()} (the server's host)")
+        self.relay.setToolTip("The gateway relay File > Open stream lists live streams from, HOST:PORT")
+        self.history = QDoubleSpinBox()
+        self.history.setRange(1.0, 600.0)
+        self.history.setDecimals(0)
+        self.history.setSuffix(" s")
+        self.history.setValue(settings.live_history_s)
+        self.history.setToolTip("How much of each live stream is kept")
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         form = QFormLayout(self)
         form.addRow("srv-senselab address", self.server)
         form.addRow("Token file", token_row)
+        form.addRow("Live streams from", self.relay)
+        form.addRow("Keep of each live stream", self.history)
         form.addRow(buttons)
         self.resize(420, self.sizeHint().height())
 
     def accept(self) -> None:
         self.settings.server = self.server.text()
         self.settings.token_file = self.token_file.text()
+        self.settings.relay = self.relay.text()
+        self.settings.live_history_s = self.history.value()
         super().accept()
 
     def _browse(self) -> None:

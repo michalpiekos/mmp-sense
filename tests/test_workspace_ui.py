@@ -14,8 +14,9 @@ from mmp_sense.ui.main_window import MainWindow               # noqa: E402
 from mmp_sense.workspace import Workspace                     # noqa: E402
 from mmp_sense.workspace import sync                          # noqa: E402
 
-MENU = ["&New", "&Open...", "Open &workspace...", "&Create workspace...", "",
-        "&Save", "Save wor&kspace", "Save workspace &as...", "Save a&ll", "", "S&ynchronize"]
+MENU = ["&New", "&Open...", "Open s&tream...", "Open &workspace...", "&Create workspace...", "",
+        "&Save", "Save wor&kspace", "Save workspace &as...", "Save a&ll", "Save s&election to workspace",
+        "", "S&ynchronize"]
 
 
 @pytest.fixture

@@ -165,6 +165,10 @@ class MainWindow(QMainWindow):
 
         #: The File menu and the Workspace dock: `workspace` and the recording `shown` of it.
         self.files = WorkspaceControl(self, workspace, shown)
+        from .live_control import LiveControl
+
+        #: File > Open stream, Save selection, and the Live streams dock.
+        self.live = LiveControl(self)
         # Empty until a band is added, which opens it.
         self.set_dock_collapsed(self.bands_dock, True)
         if hasattr(self, "console_dock"):

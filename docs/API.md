@@ -602,6 +602,27 @@ results = sync.synchronize(ws, sync.Client("http://192.168.1.2:8080", token))
 identities, and carries on there. `synchronize` saves the workspace after
 each recording, so a run cut short continues where it stopped.
 
+## Live streams
+
+What **File → Open stream** does is in `mmp_sense.streaming`:
+
+```python
+from mmp_sense.streaming import LiveStreams, cut, list_streams
+
+listed = list_streams("192.168.1.2:8091", token)    # the relay's open sessions
+live = LiveStreams(session)
+names = live.open("192.168.1.2:8091", listed, token, history_s=120)
+live.align()                                        # call now and then: places each stream on UTC
+live.set_trim(names[1], -0.012)                     # 12 ms earlier, by hand
+fragments = cut(live, 10.0, 12.5)                   # WAVs of that stretch, one per stream
+```
+
+A stream's samples keep its node's own times; `align` sets the
+session's clock correction of each (`session.set_clock`) so they share
+an axis whose zero is `live.epoch`, a UTC second. `RelayStream` and
+`RelaySource` are the client and the session source beneath, usable on
+their own to read a relay from a script.
+
 ## MCP
 
 `session.serve()` opens a Unix socket under `$XDG_RUNTIME_DIR/mmp-sense`,

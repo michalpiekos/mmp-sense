@@ -87,6 +87,28 @@ copy to trim or cut down, sent as sessions of its own. The menus and the
 dock are in [docs/window.md](docs/window.md#the-menus-and-the-workspace-dock),
 the folder in [docs/formats.md](docs/formats.md#a-workspace-folder).
 
+## Watch nodes live
+
+Nodes stream to a srv-senselab gateway: the server's, or
+`senselab-gateway` on a laptop away from it. In the window,
+**File → Open stream** lists what that gateway is relaying; tick one
+or more nodes to watch them. Each stream gets its own chart, and all
+of them share one time axis in UTC, taken from the nodes' clocks.
+
+```text
+node ──> gateway ──relay :8091──> mmp-sense: a chart per stream, one UTC axis
+                                     └─ shift-drag, File → Save selection ──> workspace ──> Synchronize
+```
+
+The relay is the server's host on port 8091 unless **Edit → Settings**
+names another (`127.0.0.1:8091` for a gateway on this laptop). The
+server's relay wants the token Synchronize uses; it is sent only to the
+server's host, or to this machine for an ssh tunnel, never elsewhere. To keep a stretch, select it and choose
+**File → Save selection to workspace**: each stream becomes a WAV, the
+node's own samples with their channel names and UTC start. The **Live
+streams** dock shows how each stream is timed, and moves one by hand
+with **Trim** ([docs/window.md](docs/window.md#live-streams)).
+
 ## Watch a simulated accelerometer
 
 ```sh

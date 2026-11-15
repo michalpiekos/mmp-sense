@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__all__ = ["load_into", "BUFFER_S"]
+__all__ = ["load_into", "series_of", "BUFFER_S"]
 
 #: The least a session holds; a recording is held whole however long.
 BUFFER_S = 60.0
@@ -26,3 +26,15 @@ def load_into(session, series) -> None:
     for source, name in zip(sources[1:], names[1:]):
         session.add(source, name)
     session.poll()
+
+
+def series_of(workspace, recording) -> list:
+    """What a workspace recording holds, with the channel names its file
+    cannot carry (a live fragment's WAV)."""
+    from ..io.files import read_file
+
+    series = read_file(workspace.path_of(recording), **recording.options)
+    names = recording.meta.get("channel_names")
+    if names and len(series) == 1 and len(names) == series[0].n_channels:
+        series[0].channels = list(names)
+    return series
