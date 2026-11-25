@@ -19,7 +19,8 @@ usage: run-tests.sh [--no-install] [pytest argument...]
 
 Everything after the options is passed to pytest.
 
-  VENV   virtual environment to use (default .venv)
+  VENV        virtual environment to use (default .venv)
+  MMP_STREAM  the mmp-stream checkout to install (default ../mmp-stream)
 USAGE
 }
 
@@ -43,6 +44,7 @@ if [ ! -x "$venv/bin/python" ]; then
 	install=yes
 fi
 if [ "$install" = yes ]; then
+	"$venv/bin/pip" install --quiet --editable "${MMP_STREAM:-$top/../mmp-stream}"
 	"$venv/bin/pip" install --quiet --config-settings editable_mode=compat \
 		--editable '.[gui,mcp,test]'
 fi

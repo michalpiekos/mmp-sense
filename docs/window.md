@@ -78,7 +78,9 @@ untitled, holding the file named on the command line, if any.
 | File menu | What it does |
 |---|---|
 | **New** | Not yet: a recording to stream into |
-| **Open...** (`Ctrl+O`) | Add a file, or a srv-senselab session folder (its `capture_session.json` too), to the workspace and show it |
+| **Open...** (`Ctrl+O`) | Add a file, or a session folder (its `session.json` too), to the workspace and show it |
+| **Open stream...** | Watch live streams from a relay ([Live streams](#live-streams)) |
+| **Receive streams** | Make this window the receiver nodes stream to; each stream is kept whole in the workspace ([Live streams](#live-streams)) |
 | **Open workspace...** | Work on a workspace folder; its first recording is shown |
 | **Create workspace...** | Put the workspace in a new, empty folder, with a title. An untitled one goes there with what it holds; otherwise a new, empty one starts |
 | **Save** (`Ctrl+S`) | Copy the shown recording into the workspace folder, byte for byte |
@@ -90,38 +92,32 @@ untitled, holding the file named on the command line, if any.
 Saving into an untitled workspace asks for a folder first.
 
 **Edit → Settings...** holds, for every window, the srv-senselab
-address Synchronize sends to (such as `http://192.168.1.2:8080`) and,
-optionally, the **token file**: the file `sample source create
---token-file` writes. With a token file, the token is read from it each
-time. Without one, the first Synchronize asks for a source token and
-remembers it, only for you (`~/.config/mmp-sense/credentials.json`), and
-forgets it when the server refuses it.
+address Synchronize sends to (such as `http://192.168.1.2:8080`; no
+credentials), the relay **Open stream** asks, and where **Receive
+streams** listens (`0.0.0.0:8090`) and relays (`127.0.0.1:8091`).
 
 Synchronize runs in the background; the status bar shows its progress
-and a summary follows. Each recording becomes one capture session on the
-server, sent once:
+and a summary follows. Each recording becomes one session on the
+server, sent once; a session folder is sent as the session it is:
 
 - what was sent is never sent again, and an interrupted upload resumes;
-- edited title, tags or notes are sent again on their own;
-- a folder exported from srv-senselab, and recordings not saved yet, are
-  skipped;
+- edited title, tags or notes are sent again as the session's next revision;
+- recordings not saved yet are skipped;
 - a workspace sent to one server is not sent to another: use **Save
   workspace as** for a copy to send there.
 
-The **Workspace** dock lists the recordings, marked `unsaved`, `on the
-server` or `from the server`; click one to show it. Below the list are
+The **Workspace** dock lists the recordings, marked `unsaved` or `on the
+server`; click one to show it. Below the list are
 the chosen recording's **Title**, **Tags** (comma separated, such as
-`kind:knock, env:door`), **Started** (UTC, fixed once on the server) and
+`kind:knock, env:door`), **Started** (UTC, fixed once sent, and for a session folder) and
 **Notes**, edited in place and kept with **Save workspace**.
 
 ## Live streams
 
-**File → Open stream...** asks a gateway relay which streams are open --
-the relay is in **Edit → Settings** (`Live streams from`; by default the
-server's host, port 8091) and can be changed in the dialog. The token
-Synchronize uses goes only to a relay on the server's host, or on this
-machine (`ssh -L 8091:127.0.0.1:8091 server`); a laptop's gateway needs
-none. Tick the
+**File → Open stream...** asks an mmp-stream relay which streams are
+open -- while the window receives, its own; otherwise the relay in
+**Edit → Settings** (`Live streams from`; by default the server's host,
+port 8091), which can be changed in the dialog. Tick the
 streams to watch and press **Watch**. They replace what the window
 showed: a chart per stream, all its channels drawn together (tetra:
 `S`, `N`, `W`, `E`), then the spectrum and spectrogram of the first.
@@ -130,9 +126,19 @@ Showing a recording of the workspace again stops watching.
 All the streams share one time axis: seconds from a UTC second near the
 first one's start. Each stream is placed by the UTC its node reports
 against its own clock (tetra: NTP, ±20 ms; GNSS with PPS would be far
-closer), or, without that, by when its data reached the gateway
+closer), or, without that, by when its data reached the receiver
 (±100 ms). Within a stream, samples are timed by the node's sample
 counter, so a lost block is a gap at the right time.
+
+**File → Receive streams** runs an [mmp-stream](../../mmp-stream)
+receiver inside the window, so a laptop in the field needs nothing else:
+point the nodes at this machine (`tetra> receiver <laptop-ip>`), and the
+status bar shows where it listens. Every stream is written to disk while
+it arrives -- the workspace's `received/` once the workspace is in a
+folder, else a temporary folder -- and when it ends it is added to the
+workspace whole, as a session folder with its title and tags, ready to
+Synchronize. A stream cut off by a crash is finished and added the next
+time receiving starts. Turning it off, or closing the window, stops it.
 
 The **Live streams** dock lists the streams: whether each is live or
 ended (and why: `clean`, `link_lost`, ...), the frames lost, where its

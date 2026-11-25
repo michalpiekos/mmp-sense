@@ -345,17 +345,7 @@ def test_a_24_bit_multichannel_wav_keeps_its_rate_and_channels(tmp_path):
 # -- delimited text -----------------------------------------------------
 
 
-def test_srv_senselab_clip_csv_is_in_seconds_and_si_units(tmp_path):
-    path = tmp_path / "1a2b3c4d_accelerometer_10.000-12.000.csv"
-    rows = "\n".join(f"{10_000_000_000 + i * 5_000_000},0.1,0.2,9.81" for i in range(400))
-    path.write_text("t_ns,x,y,z\n" + rows + "\n")
-    (series,) = read_file(path)
-    assert series.channels == ["x", "y", "z"] and series.units == "m/s^2"
-    assert series.time[0] == pytest.approx(10.0)
-    assert series.rate == pytest.approx(200)
-
-
-def test_srv_senselab_gnss_csv_keeps_its_gaps(tmp_path):
+def test_gnss_csv_keeps_its_gaps(tmp_path):
     path = tmp_path / "1a2b3c4d_gnss_0.000-3.000.csv"
     path.write_text("t_ns,latitude,longitude,altitude_m,accuracy_m,speed_mps,bearing_deg\n"
                     "0,51.1,17.0,,4.0,,\n1000000000,51.2,17.0,,4.0,,\n")

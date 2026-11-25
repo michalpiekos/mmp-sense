@@ -150,8 +150,8 @@ def _delay(session, x: str, y: str, t0=None, t1=None, max_lag=None, method="phat
     return {"x": x, "y": y, "stretch": _stretch(session, t0, t1), **found.to_dict()}
 
 
-@_tool("get_clocks", "The clocks the recording declared (a session exported by "
-       "srv-senselab): id, name, kind, hz, bits, timeline, source, domain.")
+@_tool("get_clocks", "The clocks the recording declared (a session folder): "
+       "id, name, kind, hz, bits, timeline, source, domain.")
 def _clocks(session):
     return {"clocks": jsonable(session.clocks().to_dict("records"))}
 
@@ -159,7 +159,7 @@ def _clocks(session):
 @_tool("get_clock_observations",
        "The recording's clock readings, raw, a row per reading: time (session s), kind "
        "(device, pong, arrival), clock, value (its ticks), uncertainty_ns, pps and the "
-       "gateway's UTC fields. Optionally only one `clock`, and at most `limit` rows.",
+       "receiver's UTC fields. Optionally only one `clock`, and at most `limit` rows.",
        clock="a clock's name", limit="most rows to return")
 def _clock_observations(session, clock=None, limit=1000):
     table = session.clock_observations()

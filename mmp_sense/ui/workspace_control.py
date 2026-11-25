@@ -18,7 +18,7 @@ from ..settings import Settings
 from ..workspace import Workspace, WorkspaceError
 from ..workspace import sync as syncing
 from ..workspace.loading import load_into, series_of
-from ..io.session_export import SESSION_FILE
+from ..io.session_folder import SESSION_FILE
 from .widgets import WorkspaceDock
 
 __all__ = ["WorkspaceControl"]
@@ -90,7 +90,7 @@ class WorkspaceControl(QObject):
 
         edit = self.window.menuBar().addMenu("&Edit")
         self.settings_action = QAction("&Settings...", self.window)
-        self.settings_action.setStatusTip("The srv-senselab Synchronize sends to, and its token")
+        self.settings_action.setStatusTip("The srv-senselab Synchronize sends to, and the live stream addresses")
         self.settings_action.triggered.connect(lambda _checked=False: self.edit_settings())
         edit.addAction(self.settings_action)
         self.edit_menu = edit
@@ -212,7 +212,7 @@ class WorkspaceControl(QObject):
             self.tell("Save", str(exc), problem=True)
         self._changed()
 
-    def synchronize(self, server=None, token=None, wait: bool = False) -> None:
+    def synchronize(self, server=None, wait: bool = False) -> None:
         """Send the workspace to srv-senselab, in the background unless `wait`, then here."""
         if self.syncing is not None:
             return
@@ -230,36 +230,20 @@ class WorkspaceControl(QObject):
         if not server:
             return
         server = server.rstrip("/")
-        sent = any(r.sync.declared for r in workspace.recordings)
+        sent = any(r.sync.context_sent is not None for r in workspace.recordings)
         if sent and workspace.server and workspace.server != server:
             self.tell("Synchronize", f"This workspace was sent to {workspace.server}, and the "
                       f"settings name {server}. Set that address back in Edit > Settings, or "
                       "use File > Save workspace as for a copy to send to the new one.",
                       problem=True)
             return
-        from_file = not token and bool(settings.token_file)
-        if from_file:
-            try:
-                token = settings.read_token()
-            except (OSError, ValueError) as exc:
-                self.tell("Synchronize", f"The token file in Edit > Settings: {exc}", problem=True)
-                return
-        token = token or syncing.load_token(server) or self.ask_text(
-            "Synchronize", f"Source token for {server}\n(sample source create --type import)",
-            secret=True)
-        if not token:
-            return
         try:
-            if not from_file:
-                syncing.store_token(server, token)
             workspace.server = server
             workspace.save()
         except OSError as exc:
             self.tell("Synchronize", str(exc), problem=True)
             return
-        client = syncing.Client(server, token)
-        self._sending_to = server
-        self._token_from_file = from_file
+        client = syncing.Client(server)
 
         def run():
             try:
@@ -293,11 +277,6 @@ class WorkspaceControl(QObject):
         self.last_results = results
         lines = [f"{r.recording.label}: {r.outcome}" + (f" -- {r.message}" if r.message else "")
                  for r in results] or ["The workspace has no recordings."]
-        if any(r.status == 401 for r in results):
-            if self._token_from_file:
-                lines.append("The token in the token file of Edit > Settings was refused.")
-            else:
-                syncing.forget_token(self._sending_to)
         failed = any(r.outcome == "failed" for r in results)
         self.tell("Synchronize", "\n".join(lines), problem=failed)
 

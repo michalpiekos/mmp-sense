@@ -1,4 +1,4 @@
-"""File -> Open stream and Save selection to workspace, and the Live streams dock.
+"""File -> Open stream, Receive streams and Save selection to workspace, and the Live streams dock.
 
 Like the File menu's other actions, each takes what its dialog would ask as
 arguments too, so a script or a test can run it without one.
@@ -6,49 +6,57 @@ arguments too, so a script or a test can run it without one.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, QTimer
+import tempfile
+from pathlib import Path
+
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction
+from PySide6.QtWidgets import QLabel
 
 from ..settings import Settings
 from ..streaming import LiveStreams, RelayError, cut
 from .panes.base import ALL_CHANNELS
 from .widgets.live_dock import LiveDock
 
-__all__ = ["LiveControl", "relay_token"]
+__all__ = ["LiveControl", "address"]
 
 #: How often the streams' alignment and the dock are brought up to date.
 ALIGN_MS = 500
 
 
-def _host(address: str) -> str | None:
-    from urllib.parse import urlsplit
-
-    return urlsplit(address if "://" in address else "http://" + address).hostname
-
-
-def relay_token(settings: Settings, relay: str) -> str | None:
-    """The server's source token, for a relay on the server's own host, or on
-    this machine (an ssh tunnel to it): no other host is given it."""
-    host = _host(relay)
-    if not settings.server or host not in (_host(settings.server), "localhost", "127.0.0.1", "::1"):
-        return None
-    return settings.token()
+def address(text: str, default_port: int) -> tuple[str, int]:
+    """HOST:PORT as a (host, port) to bind."""
+    host, _, port = text.strip().rpartition(":")
+    return (host or "0.0.0.0", int(port)) if port.isdigit() else (text.strip() or "0.0.0.0", default_port)
 
 
 class LiveControl(QObject):
+    #: A stream the receiver finished saving: its session folder (sent from the receiver's thread).
+    received = Signal(object)
+
     def __init__(self, window) -> None:
         super().__init__(window)
         self.window = window
         self.live = LiveStreams(window.session)
+        #: The mmp_stream.Receiver of File > Receive streams, while it runs.
+        self.receiver = None
+        self.received.connect(self._received)
         files = window.files
         self.open_action = QAction("Open s&tream...", window)
-        self.open_action.setStatusTip("Watch live streams from a gateway relay")
+        self.open_action.setStatusTip("Watch live streams from a relay")
         self.open_action.triggered.connect(lambda _checked=False: self.open_streams())
+        self.receive_action = QAction("&Receive streams", window)
+        self.receive_action.setCheckable(True)
+        self.receive_action.setStatusTip("Take node streams here, watch them, and keep each one whole in the workspace")
+        self.receive_action.toggled.connect(self._receive_toggled)
+        self.receiving_label = QLabel()
+        window.statusBar().addPermanentWidget(self.receiving_label)
         self.save_action = QAction("Save s&election to workspace", window)
         self.save_action.setStatusTip("Keep the selected stretch of every live stream as workspace recordings")
         self.save_action.triggered.connect(lambda _checked=False: self.save_selection())
         actions = files.menu.actions()
         files.menu.insertAction(actions[actions.index(files.open_action) + 1], self.open_action)
+        files.menu.insertAction(actions[actions.index(files.open_action) + 1], self.receive_action)
         files.menu.insertAction(actions[actions.index(files.save_all_action) + 1], self.save_action)
 
         self.dock = LiveDock()
@@ -63,11 +71,11 @@ class LiveControl(QObject):
 
     # -- what a dialog would ask; replaced in tests ---------------------------
 
-    def ask_streams(self, relay: str, token_for):
+    def ask_streams(self, relay: str):
         """(relay, the relayed sessions ticked) or None."""
         from .stream_dialog import OpenStreamDialog
 
-        dialog = OpenStreamDialog(relay, token_for, self.window)
+        dialog = OpenStreamDialog(relay, self.window)
         try:
             if dialog.exec() != OpenStreamDialog.Accepted or not dialog.chosen:
                 return None
@@ -77,22 +85,19 @@ class LiveControl(QObject):
 
     # -- actions --------------------------------------------------------------
 
-    def open_streams(self, listings=None, relay: str | None = None, token: str | None = None,
-                     replace: bool = True) -> list[str]:
-        """Watch relayed sessions (`listings`, as `GET /live` lists them).
-        The first replaces what the window shows; with `replace=False` they join it."""
+    def open_streams(self, listings=None, relay: str | None = None, replace: bool = True) -> list[str]:
+        """Watch relayed sessions (`listings`, as `GET /live` lists them): from this window's own
+        relay while it receives, else the one in the settings. The first replaces what the
+        window shows; with `replace=False` they join it."""
         settings = Settings.load()
-        relay = relay or settings.relay_address()
-
-        def token_for(address: str) -> str | None:
-            return token or relay_token(settings, address)
-
+        own = self.receiving_relay()
+        relay = relay or own or settings.relay_address()
         if listings is None:
-            asked = self.ask_streams(relay, token_for)
+            asked = self.ask_streams(relay)
             if asked is None:
                 return []
             chosen_relay, listings = asked
-            if chosen_relay and chosen_relay != relay:
+            if chosen_relay and chosen_relay != relay and chosen_relay != own:
                 relay = settings.relay = chosen_relay
                 try:
                     settings.save()
@@ -102,8 +107,7 @@ class LiveControl(QObject):
         try:
             if replace:
                 self.window.player.stop(quietly=True)
-            names = self.live.open(relay, listings, token_for(relay), history_s=settings.live_history_s,
-                                   replace=replace)
+            names = self.live.open(relay, listings, history_s=settings.live_history_s, replace=replace)
         except (RelayError, ValueError, KeyError) as exc:
             self.window.files.tell("Open stream", str(exc), problem=True)
             return []
@@ -114,6 +118,72 @@ class LiveControl(QObject):
         self.dock.show_streams(self.live)
         self.window.files._changed()
         return names
+
+    # -- receiving --------------------------------------------------------------
+
+    def receiving_relay(self) -> str | None:
+        """HOST:PORT of this window's own relay while it receives."""
+        if self.receiver is None or self.receiver.relay_address is None:
+            return None
+        host, port = self.receiver.relay_address
+        return f"{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}"
+
+    def _receive_toggled(self, on: bool) -> None:
+        if on and self.receiver is None:
+            self.start_receiving()
+        elif not on and self.receiver is not None:
+            self.stop_receiving()
+
+    def start_receiving(self, bind: str | None = None, relay: str | None = None) -> bool:
+        """Take node streams on `bind` and relay them on `relay` (by default the settings'); each
+        finished stream is saved whole, in the workspace's received/ while it is in a folder."""
+        if self.receiver is not None:
+            return True
+        import mmp_stream
+
+        settings = Settings.load()
+        workspace = self.window.files.workspace
+        out = (workspace.folder / "received") if workspace.folder is not None else Path(
+            tempfile.mkdtemp(prefix="mmp-sense-received-"))
+        try:
+            self.receiver = mmp_stream.Receiver(address(bind or settings.receive_bind, 8090),
+                                                address(relay or settings.receive_relay, 8091), out,
+                                                on_saved=self.received.emit, log=lambda _line: None).start()
+        except (OSError, ValueError) as exc:
+            self.receiver = None
+            self.window.files.tell("Receive streams", f"Cannot receive: {exc}", problem=True)
+            self._show_receiving()
+            return False
+        self._show_receiving()
+        return True
+
+    def stop_receiving(self) -> None:
+        receiver, self.receiver = self.receiver, None
+        if receiver is not None:
+            receiver.stop()
+        self._show_receiving()
+
+    def _show_receiving(self) -> None:
+        on = self.receiver is not None
+        self.receive_action.blockSignals(True)
+        self.receive_action.setChecked(on)
+        self.receive_action.blockSignals(False)
+        if on:
+            host, port = self.receiver.address
+            self.receiving_label.setText(f"Receiving streams on {host}:{port}, relayed on {self.receiving_relay()}")
+        else:
+            self.receiving_label.setText("")
+
+    def _received(self, folder) -> None:
+        """A stream the receiver saved: into the workspace, whole."""
+        files = self.window.files
+        try:
+            recording = files.workspace.adopt(Path(folder))
+        except (OSError, ValueError) as exc:
+            files.tell("Receive streams", f"{Path(folder).name}: {exc}", problem=True)
+            return
+        files._changed()
+        self.window.statusBar().showMessage(f"Received {recording.label}, kept in the workspace", 8000)
 
     def save_selection(self) -> list:
         """Every live stream's frames in the selection, as unsaved workspace recordings."""

@@ -7,14 +7,14 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 
-from fake_senselab import TOKEN, FakeSenselab                 # noqa: E402
+from senselab import Senselab                                # noqa: E402
 from test_workspace import files                              # noqa: E402,F401
 from mmp_sense.ui.app import build, parse_args                # noqa: E402
 from mmp_sense.ui.main_window import MainWindow               # noqa: E402
 from mmp_sense.workspace import Workspace                     # noqa: E402
 from mmp_sense.workspace import sync                          # noqa: E402
 
-MENU = ["&New", "&Open...", "Open s&tream...", "Open &workspace...", "&Create workspace...", "",
+MENU = ["&New", "&Open...", "Open s&tream...", "&Receive streams", "Open &workspace...", "&Create workspace...", "",
         "&Save", "Save wor&kspace", "Save workspace &as...", "Save a&ll", "Save s&election to workspace",
         "", "S&ynchronize"]
 
@@ -91,32 +91,30 @@ def test_save_workspace_as_works_on_the_copy(window, files, tmp_path):
     f.create_workspace(tmp_path / "one", "One")
     f.open_file(files[0])
     f.save_all()
-    before = (f.workspace.id, f.workspace.recordings[0].sync.capture_session_id)
+    before = (f.workspace.id, sync.session_id_of(f.workspace.recordings[0]))
     f.save_workspace_as(tmp_path / "two")
     assert f.workspace.folder == tmp_path / "two"
-    assert (f.workspace.id, f.workspace.recordings[0].sync.capture_session_id) != before
+    assert (f.workspace.id, sync.session_id_of(f.workspace.recordings[0])) != before
     assert Workspace.open(tmp_path / "one").id == before[0]
 
 
-def test_synchronize_sends_and_keeps_the_token_out_of_the_workspace(window, files, tmp_path):
+def test_synchronize_sends_and_remembers_the_server(window, files, tmp_path):
     f = window.files
     f.create_workspace(tmp_path / "ws", "Field day")
     f.open_file(files[0])
     f.save_all()
-    with FakeSenselab() as fake:
-        f.synchronize(fake.url, TOKEN, wait=True)
+    with Senselab(tmp_path / "srv") as server:
+        f.synchronize(server.url, wait=True)
         assert [r.outcome for r in f.last_results] == ["sent"]
-        assert len(fake.samples) == 1
+        assert server.store.status()["sessions"] == 1
         assert f.told[-1][0] == "Synchronize" and not f.told[-1][2]
-        assert sync.load_token(fake.url) == TOKEN
-        assert TOKEN not in (tmp_path / "ws" / "workspace.json").read_text()
-        assert Workspace.open(tmp_path / "ws").server == fake.url
+        assert Workspace.open(tmp_path / "ws").server == server.url
         assert "on the server" in f.dock.list.item(0).text()
         assert f.dock.started.isReadOnly()
 
         f.ask_text = lambda *_a, **_k: pytest.fail("nothing should be asked")
-        set_server(f, fake.url)
-        f.synchronize(wait=True)             # the address from the settings, the token remembered
+        set_server(f, server.url)
+        f.synchronize(wait=True)             # the address from the settings
         assert [r.outcome for r in f.last_results] == ["up to date"]
 
 
@@ -148,16 +146,15 @@ def test_synchronize_without_a_server_opens_the_settings(window, files, tmp_path
     f.create_workspace(tmp_path / "ws", "Field day")
     f.open_file(files[0])
     f.save_all()
-    with FakeSenselab() as fake:
+    with Senselab(tmp_path / "srv") as server:
         opened = []
 
         def fill(settings):
             opened.append(settings.server)
-            settings.server = fake.url
+            settings.server = server.url
             return True
 
         f.ask_settings = fill
-        f.ask_text = lambda *_a, **_k: TOKEN
         f.synchronize(wait=True)
         assert opened == [""]
         assert [r.outcome for r in f.last_results] == ["sent"]
@@ -168,33 +165,18 @@ def test_a_workspace_is_not_sent_to_a_second_server(window, files, tmp_path):
     f.create_workspace(tmp_path / "ws", "Field day")
     f.open_file(files[0])
     f.save_all()
-    with FakeSenselab() as fake:
-        f.synchronize(fake.url, TOKEN, wait=True)
-        calls = len(fake.calls)
+    with Senselab(tmp_path / "srv") as server:
+        f.synchronize(server.url, wait=True)
+        calls = len(server.calls)
         set_server(f, "http://elsewhere:8080")
-        f.synchronize(token=TOKEN, wait=True)
-        assert f.told[-1][2] and fake.url in f.told[-1][1]
-        assert len(fake.calls) == calls
-
-
-def test_a_refused_token_is_forgotten(window, files, tmp_path):
-    f = window.files
-    f.create_workspace(tmp_path / "ws", "Field day")
-    f.open_file(files[0])
-    f.open_file(files[1])
-    f.save_all()
-    with FakeSenselab() as fake:
-        f.synchronize(fake.url, "mmps_wrong", wait=True)
-        assert [r.outcome for r in f.last_results] == ["failed", "failed"]
-        assert "not tried" in f.last_results[1].message
-        assert [path for _m, path in fake.calls] == [f"/capture-sessions/{f.workspace.recordings[0].sync.capture_session_id}"]
-        assert sync.load_token(fake.url) is None
-        assert f.told[-1][2]
+        f.synchronize(wait=True)
+        assert f.told[-1][2] and server.url in f.told[-1][1]
+        assert len(server.calls) == calls
 
 
 def test_synchronize_needs_a_workspace_on_disk(window, files):
     window.files.open_file(files[0])
-    window.files.synchronize("http://127.0.0.1:9", TOKEN, wait=True)
+    window.files.synchronize("http://127.0.0.1:9", wait=True)
     assert window.files.told[-1][2]
 
 
@@ -218,59 +200,17 @@ def test_the_command_line_puts_a_file_in_an_untitled_workspace(qapp, files):
     assert not shown.saved
 
 
-def test_the_token_is_read_from_the_token_file_in_the_settings(window, files, tmp_path):
-    f = window.files
-    f.create_workspace(tmp_path / "ws", "Field day")
-    f.open_file(files[0])
-    f.save_all()
-    token_file = tmp_path / "mmp-sense.token"
-    token_file.write_text(TOKEN + "\n")
-    with FakeSenselab() as fake:
-        def fill(settings):
-            settings.server, settings.token_file = fake.url, f" {token_file} "
-            return True
-
-        f.ask_settings = fill
-        f.edit_settings()
-        f.ask_text = lambda *_a, **_k: pytest.fail("nothing should be asked")
-        f.synchronize(wait=True)
-        assert [r.outcome for r in f.last_results] == ["sent"]
-        assert sync.load_token(fake.url) is None            # not copied anywhere
-
-        token_file.write_text("mmps_wrong")
-        f.workspace.recordings[0].notes = "changed"
-        f.synchronize(wait=True)
-        assert f.told[-1][2] and "token file" in f.told[-1][1]
-        assert token_file.read_text() == "mmps_wrong"
-
-
-def test_a_missing_token_file_is_told(window, files, tmp_path):
-    f = window.files
-    f.create_workspace(tmp_path / "ws", "Field day")
-    f.open_file(files[0])
-    f.save_all()
-
-    def fill(settings):
-        settings.server, settings.token_file = "http://127.0.0.1:9", str(tmp_path / "none")
-        return True
-
-    f.ask_settings = fill
-    f.edit_settings()
-    f.synchronize(wait=True)
-    assert f.told[-1][2] and "token file" in f.told[-1][1]
-    assert f.syncing is None
-
-
-def test_the_settings_dialog_edits_the_address_and_the_token_file(qapp, tmp_path, monkeypatch):
+def test_the_settings_dialog_edits_the_addresses(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     from mmp_sense.settings import Settings
     from mmp_sense.ui.settings_dialog import SettingsDialog
 
-    settings = Settings(server="http://a:8080", token_file="/old")
+    settings = Settings(server="http://a:8080")
     dialog = SettingsDialog(settings)
-    assert (dialog.server.text(), dialog.token_file.text()) == ("http://a:8080", "/old")
+    assert (dialog.server.text(), dialog.receive_bind.text(), dialog.receive_relay.text()) == (
+        "http://a:8080", "0.0.0.0:8090", "127.0.0.1:8091")
     dialog.server.setText("http://b:8080/ ")
-    dialog.token_file.setText(" ~/mmp-sense.token ")
+    dialog.receive_bind.setText(" 0.0.0.0:9090 ")
     dialog.accept()
     settings.save()
-    assert Settings.load() == Settings("http://b:8080", "~/mmp-sense.token")
+    assert Settings.load() == Settings("http://b:8080", receive_bind="0.0.0.0:9090")

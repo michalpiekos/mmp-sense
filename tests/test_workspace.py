@@ -4,15 +4,14 @@ sent to srv-senselab."""
 from __future__ import annotations
 
 import json
-import stat
 
 import numpy as np
 import pytest
 from scipy.io import wavfile
 
-from fake_senselab import TOKEN, FakeSenselab
-from test_files import START, json_schema, tone, write_mcap
-from test_session_export import SESSION, export  # noqa: F401
+from senselab import Senselab
+from test_files import START, json_schema, tone, write_mcap  # noqa: F401
+from test_session_folder import SESSION, folder  # noqa: F401
 from mmp_sense.workspace import Workspace, WorkspaceError, is_workspace
 from mmp_sense.workspace import sync
 
@@ -28,8 +27,20 @@ def files(tmp_path):
     return wav, mcap
 
 
-def _client(fake):
-    return sync.Client(fake.url, TOKEN, pause=lambda _s: None)
+def _client(server, fail=None):
+    """A client of `server`; `fail` is a set of (method, path fragment) to fail once with a 500."""
+    client = sync.Client(server.url, pause=lambda _s: None)
+    if fail is not None:
+        call = client.call
+
+        def failing(method, path, *args, **kwargs):
+            for key in list(fail):
+                if key[0] == method and key[1] in path and (len(key) < 3 or key[2](kwargs)):
+                    fail.discard(key)
+                    raise sync.ApiError(500, {"error": "error", "message": "injected"})
+            return call(method, path, *args, **kwargs)
+        client.call = failing
+    return client
 
 
 def test_a_saved_workspace_holds_the_files_whole_and_opens_the_same(tmp_path, files):
@@ -85,18 +96,17 @@ def test_save_as_is_an_independent_copy(tmp_path, files):
     saved = first.add(files[0])
     first.save_recording(saved)
     first.add(files[1])
-    original = {"id": first.id, "recordings": [(r.id, r.sync.capture_session_id, r.sync.sample_id)
-                                                for r in first.recordings]}
+    original = {"id": first.id, "recordings": [(r.id, sync.session_id_of(r)) for r in first.recordings]}
     on_disk = (tmp_path / "one" / "workspace.json").read_text()
 
     first.save_as(tmp_path / "two")
 
     assert first.folder == tmp_path / "two" and first.id != original["id"]
     assert not first.unsaved
-    for recording, (rid, session, sample) in zip(first.recordings, original["recordings"]):
+    for recording, (rid, session) in zip(first.recordings, original["recordings"]):
         assert recording.id != rid
-        assert recording.sync.capture_session_id != session and recording.sync.sample_id != sample
-        assert not recording.sync.declared
+        assert sync.session_id_of(recording) != session
+        assert recording.sync.context_sent is None
     copy = Workspace.open(tmp_path / "two")
     assert len(copy.recordings) == 2
     assert copy.path_of(copy.recordings[1]).read_bytes() == files[1].read_bytes()
@@ -105,10 +115,11 @@ def test_save_as_is_an_independent_copy(tmp_path, files):
         first.save_as(tmp_path / "two")
 
 
-def test_an_export_folder_is_kept_with_its_manifest_and_marked_as_the_servers(tmp_path, export):
+def test_a_session_folder_is_kept_whole_with_its_context(tmp_path, folder):
     workspace = Workspace.create(tmp_path / "ws")
-    recording = workspace.add(export)
-    assert recording.origin == "server" and recording.server_session_id == SESSION
+    recording = workspace.add(folder)
+    assert recording.origin == "session" and recording.sync.session_id == SESSION
+    assert recording.title.startswith("tetra1 ")
     workspace.save_recording(recording)
     from mmp_sense.io.files import read_file
 
@@ -116,84 +127,93 @@ def test_an_export_folder_is_kept_with_its_manifest_and_marked_as_the_servers(tm
     assert names == ["S", "N", "W", "E"]
 
 
-def test_synchronize_sends_each_recording_once(tmp_path, files, export):
+def test_a_received_folder_is_moved_in_not_copied(tmp_path, folder):
+    workspace = Workspace.create(tmp_path / "ws")
+    recording = workspace.adopt(folder)
+    assert recording.saved and not folder.exists()
+    assert (workspace.path_of(recording) / "session.json").is_file()
+    assert Workspace.open(tmp_path / "ws").recordings[0].id == recording.id
+
+
+def test_synchronize_sends_each_recording_once(tmp_path, files, folder):
     workspace = Workspace.create(tmp_path / "ws", "Field day")
     wav = workspace.add(files[0])
     wav.title, wav.tags, wav.notes = "Knock", ["kind:knock", "env:door"], "three knocks"
     mcap = workspace.add(files[1])
-    server = workspace.add(export)
-    unsaved_later = None
+    received = workspace.add(folder)
     workspace.save_all()
     unsaved_later = workspace.add(files[0])
 
-    with FakeSenselab(part_size=4096) as fake:
-        results = sync.synchronize(workspace, _client(fake))
+    with Senselab(tmp_path / "srv") as server:
+        results = sync.synchronize(workspace, _client(server))
         outcome = {r.recording.id: r.outcome for r in results}
-        assert outcome == {wav.id: "sent", mcap.id: "sent", server.id: "skipped",
-                           unsaved_later.id: "skipped"}
-        sample = fake.samples[wav.sync.sample_id]
-        assert sample["data"] == files[0].read_bytes()
-        declaration = sample["declaration"]
-        assert declaration["media_type"] == "audio/wav"
-        assert declaration["encoding"] == {"container": "wav", "sample_rate_hz": 16_000, "channels": 1}
-        assert fake.samples[mcap.sync.sample_id]["declaration"]["media_type"] == "application/x-mcap"
-        session = fake.sessions[wav.sync.capture_session_id]
-        assert session["metadata"]["workspace_id"] == workspace.id
-        assert fake.contexts[wav.sync.capture_session_id] == {
-            "revision": 1, "tag_policy_version": 1, "title": "Knock",
-            "tags": ["env:door", "kind:knock"], "capture_notes": "three knocks"}
-        assert set(fake.closed) == {wav.sync.capture_session_id, mcap.sync.capture_session_id}
+        assert outcome == {wav.id: "sent", mcap.id: "sent", received.id: "sent", unsaved_later.id: "skipped"}
+        assert wav.sync.session_id == wav.id
+        m = server.manifest(wav.id)
+        assert (m["title"], m["tags"], m["notes"], m["revision"]) == ("Knock", ["env:door", "kind:knock"], "three knocks", 0)
+        assert m["origin"] == "mmp-sense" and m["workspace"]["id"] == workspace.id
+        (entry,) = m["files"]
+        assert entry["media_type"] == "audio/wav" and "source" not in entry
+        assert server.file(entry["sha256"]) == files[0].read_bytes()
+        assert server.manifest(mcap.id)["files"][0]["media_type"] == "application/x-mcap"
+        r = server.manifest(SESSION)
+        assert r["origin"] == "stream" and {f["name"] for f in r["files"]} == {"mics.wav", "timing.jsonl"}
+        assert server.store.session(SESSION)["missing"] == []
 
-        fake.calls.clear()
-        again = sync.synchronize(Workspace.open(tmp_path / "ws"), _client(fake))
-        assert {r.outcome for r in again} == {"up to date", "skipped"}
-        assert fake.calls == []
+        server.calls.clear()
+        again = sync.synchronize(Workspace.open(tmp_path / "ws"), _client(server))
+        assert [r.outcome for r in again] == ["up to date"] * 3, "the unsaved one was never written"
+        assert server.calls == []
 
         reopened = Workspace.open(tmp_path / "ws")
         reopened.get(wav.id).notes = "four knocks"
-        results = sync.synchronize(reopened, _client(fake))
-        assert {r.recording.id: r.outcome for r in results}[wav.id] == "context"
-        assert fake.contexts[wav.sync.capture_session_id]["revision"] == 2
-        assert fake.contexts[wav.sync.capture_session_id]["capture_notes"] == "four knocks"
+        reopened.get(received.id).title = "LOT3AN"
+        results = {r.recording.id: r.outcome for r in sync.synchronize(reopened, _client(server))}
+        assert results[wav.id] == "context" and results[received.id] == "context"
+        assert (server.manifest(wav.id)["revision"], server.manifest(wav.id)["notes"]) == (1, "four knocks")
+        assert (server.manifest(SESSION)["revision"], server.manifest(SESSION)["title"]) == (1, "LOT3AN")
 
 
-def test_an_interrupted_upload_resumes_where_it_stopped(tmp_path, files):
+def test_an_interrupted_upload_resumes_where_it_stopped(tmp_path, files, monkeypatch):
+    monkeypatch.setattr(sync, "PART_BYTES", 4096)
     workspace = Workspace.create(tmp_path / "ws")
     recording = workspace.add(files[0])
     workspace.save_all()
-    with FakeSenselab(part_size=4096) as fake:
-        fake.fail_once.add(("PUT", r"/uploads/[^/]+/parts/3"))
-        first = sync.synchronize(workspace, _client(fake))
+    with Senselab(tmp_path / "srv") as server:
+        fail = {("PUT", "/uploads/", lambda kw: kw["headers"]["Content-Range"].startswith("bytes 12288-"))}
+        first = sync.synchronize(workspace, _client(server, fail))
         assert first[0].outcome == "failed" and "injected" in first[0].message
-        assert not recording.sync.uploaded and recording.sync.declared
-        fake.calls.clear()
-        second = sync.synchronize(Workspace.open(tmp_path / "ws"), _client(fake))
+        assert recording.sync.context_sent is None
+        server.calls.clear()
+        second = sync.synchronize(Workspace.open(tmp_path / "ws"), _client(server))
         assert second[0].outcome == "sent"
-        parts = [path for method, path in fake.calls if "/parts/" in path]
-        assert parts[0].endswith("/parts/3")
-        assert fake.samples[recording.sync.sample_id]["data"] == files[0].read_bytes()
+        puts = [path for method, path in server.calls if method == "PUT" and "/uploads/" in path]
+        assert len(puts) == -(-(files[0].stat().st_size - 12288) // 4096), "only the rest is sent"
+        sha = server.manifest(recording.id)["files"][0]["sha256"]
+        assert server.file(sha) == files[0].read_bytes()
 
 
-def test_a_failed_context_is_retried_at_its_revision(tmp_path, files):
+def test_a_failed_session_put_is_retried_at_its_revision(tmp_path, files):
     workspace = Workspace.create(tmp_path / "ws")
     recording = workspace.add(files[0])
     workspace.save_all()
-    with FakeSenselab() as fake:
-        fake.fail_once.add(("PUT", r"/capture-sessions/[^/]+/context"))
-        assert sync.synchronize(workspace, _client(fake))[0].outcome == "failed"
-        assert sync.synchronize(workspace, _client(fake))[0].outcome == "sent"
-        assert fake.contexts[recording.sync.capture_session_id]["revision"] == 1
+    with Senselab(tmp_path / "srv") as server:
+        assert sync.synchronize(workspace, _client(server, {("PUT", "/sessions/")}))[0].outcome == "failed"
+        assert sync.synchronize(workspace, _client(server))[0].outcome == "sent"
+        assert server.manifest(recording.id)["revision"] == 0
 
 
-def test_a_copy_is_sent_as_sessions_of_its_own(tmp_path, files):
+def test_a_copy_is_sent_as_sessions_of_its_own(tmp_path, files, folder):
     workspace = Workspace.create(tmp_path / "ws")
     workspace.add(files[0])
+    workspace.add(folder)
     workspace.save_all()
-    with FakeSenselab() as fake:
-        sync.synchronize(workspace, _client(fake))
+    with Senselab(tmp_path / "srv") as server:
+        sync.synchronize(workspace, _client(server))
         workspace.save_as(tmp_path / "copy")
-        assert sync.synchronize(workspace, _client(fake))[0].outcome == "sent"
-        assert len(fake.sessions) == 2 and len(fake.samples) == 2
+        assert [r.outcome for r in sync.synchronize(workspace, _client(server))] == ["sent", "sent"]
+        assert server.store.status()["sessions"] == 4
+        assert server.manifest(SESSION)["revision"] == 0, "the original is not contested"
 
 
 def test_an_unreachable_server_is_tried_once(tmp_path, files):
@@ -201,35 +221,27 @@ def test_an_unreachable_server_is_tried_once(tmp_path, files):
     workspace.add(files[0])
     workspace.add(files[1])
     workspace.save_all()
-    client = sync.Client("http://127.0.0.1:9", TOKEN, attempts=1)
+    client = sync.Client("http://127.0.0.1:9", attempts=1)
     results = sync.synchronize(workspace, client)
     assert [r.outcome for r in results] == ["failed", "failed"]
     assert "cannot be reached" in results[0].message and "not tried" in results[1].message
 
 
-def test_a_sensors_wav_is_not_declared_as_sound(tmp_path):
-    path = tmp_path / "accel.wav"
-    wavfile.write(path, 400, np.zeros((400, 3), dtype=np.int16))
-    workspace = Workspace.untitled()
+def test_a_file_name_the_server_refuses_is_made_safe(tmp_path):
+    path = tmp_path / "my knock (1).wav"
+    wavfile.write(path, 16_000, np.zeros(1600, dtype=np.int16))
+    workspace = Workspace.create(tmp_path / "ws")
     recording = workspace.add(path)
-    declaration = sync.declaration_of(recording, path)
-    assert declaration["modality"] == "other" and declaration["media_type"] == "audio/wav"
-    assert declaration["encoding"]["channels"] == 3
+    workspace.save_all()
+    manifest, _ = sync.manifest_of(workspace, recording)
+    assert manifest["files"][0]["name"] == "my_knock__1_.wav"
+    assert manifest["files"][0]["original_name"] == "my knock (1).wav"
+    with Senselab(tmp_path / "srv") as server:
+        assert sync.synchronize(workspace, _client(server))[0].outcome == "sent"
 
 
 def test_an_untitled_workspace_cannot_be_synchronized(files):
     workspace = Workspace.untitled()
     workspace.add(files[0])
     with pytest.raises(WorkspaceError):
-        sync.synchronize(workspace, sync.Client("http://127.0.0.1:9", TOKEN))
-
-
-def test_the_token_is_kept_for_the_user_alone(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    assert sync.load_token("http://srv:8080") is None
-    sync.store_token("http://srv:8080/", "mmps_a")
-    sync.store_token("http://other", "mmps_b")
-    assert sync.load_token("http://srv:8080") == "mmps_a"
-    path = sync.credentials_path()
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert json.loads(path.read_text()) == {"http://srv:8080": "mmps_a", "http://other": "mmps_b"}
+        sync.synchronize(workspace, sync.Client("http://127.0.0.1:9"))

@@ -1,4 +1,4 @@
-"""Live streams from a gateway relay: decoding, timing, alignment and fragments."""
+"""Live streams from a receiver's relay: decoding, timing, alignment and fragments."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from scipy.io import wavfile
 
-from fake_relay import GATEWAY_CLOCK, TOKEN, FakeRelay, clock, data, event, listing, msg
+from fake_relay import RECEIVER_CLOCK, FakeRelay, clock, data, event, hello, listing, msg
 from mmp_sense.core.session import Session
 from mmp_sense.streaming import LiveStreams, RelayError, RelayStream, cut, list_streams
 from mmp_sense.streaming.relay import PCM_FORMATS, _decode, encode
@@ -34,9 +34,9 @@ def tone(first: int, n: int, channels: int = 4, impulse_at: int | None = None) -
 
 
 def node(seconds: float, *, mono0_us: int, utc_at_mono0_ns: int, impulse_at: int | None = None,
-         utc_clock: int | None = 2, gateway_late_ns: int = 0, skip_block: int | None = None) -> list[bytes]:
+         utc_clock: int | None = 2, receiver_late_ns: int = 0, skip_block: int | None = None) -> list[bytes]:
     """A node's relayed messages: blocks of 480 frames, and once a second its
-    UTC against its timeline and the gateway's arrival time."""
+    UTC against its timeline and the receiver's arrival time."""
     out = []
     blocks = int(seconds * RATE / BLOCK)
     for b in range(blocks):
@@ -48,7 +48,7 @@ def node(seconds: float, *, mono0_us: int, utc_at_mono0_ns: int, impulse_at: int
             exact = utc_at_mono0_ns + (t_us - mono0_us) * 1000
             if utc_clock is not None:
                 out.append(clock((utc_clock, exact, 20_000_000), (0, t_us, 0)))
-            out.append(clock((GATEWAY_CLOCK, exact + gateway_late_ns, 100_000_000), (0, t_us, 0)))
+            out.append(clock((RECEIVER_CLOCK, exact + receiver_late_ns, 100_000_000), (0, t_us, 0)))
     return out
 
 
@@ -62,8 +62,15 @@ def test_every_pcm_format_decodes_and_encodes_back(fmt):
     assert encode(_decode(raw, fmt, 3), fmt) == raw
 
 
+def opened(item):
+    """A relayed session that has had its hello, as the relay sends it first."""
+    relayed = RelayStream("unused", item)
+    feed(relayed, [hello(item)])
+    return relayed
+
+
 def test_samples_are_timed_by_the_frame_counter_and_a_lost_block_is_a_gap():
-    relayed = RelayStream("unused", listing("a" * 32))
+    relayed = opened(listing("a" * 32))
     source = relayed.sources()[0]
     assert source.channels == ["S", "N", "W", "E"] and source.rate == RATE
     assert source.dtype == np.float32
@@ -81,17 +88,17 @@ def test_samples_are_timed_by_the_frame_counter_and_a_lost_block_is_a_gap():
     assert utc.offset == pytest.approx(UTC0 / 1e9 - 5.0)
 
 
-def test_without_its_own_utc_a_stream_is_timed_by_the_gateway():
-    relayed = RelayStream("unused", listing("b" * 32, utc=False))
-    for m in node(1.0, mono0_us=0, utc_at_mono0_ns=UTC0, utc_clock=None, gateway_late_ns=40_000_000):
+def test_without_its_own_utc_a_stream_is_timed_by_the_receiver():
+    relayed = opened(listing("b" * 32, utc=False))
+    for m in node(1.0, mono0_us=0, utc_at_mono0_ns=UTC0, utc_clock=None, receiver_late_ns=40_000_000):
         relayed.on_message(chr(m[0]), m[1], int.from_bytes(m[2:4], "little"), m[8:])
     utc = relayed.utc_offset()
-    assert utc.source == "gateway" and utc.uncertainty_s == pytest.approx(0.1)
+    assert utc.source == "receiver" and utc.uncertainty_s == pytest.approx(0.1)
     assert utc.offset == pytest.approx(UTC0 / 1e9 + 0.04)
 
 
 def test_nothing_is_handed_over_before_utc_is_known_unless_it_never_comes():
-    relayed = RelayStream("unused", listing("c" * 32, utc=False))
+    relayed = opened(listing("c" * 32, utc=False))
     source = relayed.sources()[0]
     for b in range(100):                               # 1 s, no observation at all
         relayed.on_message("D", 0, 1, data(b * BLOCK, b * 10_000, tone(b * BLOCK, BLOCK))[8:])
@@ -111,7 +118,7 @@ def test_the_end_and_losses_are_told():
 
 
 def test_a_scaled_stream_keeps_its_counts():
-    relayed = RelayStream("unused", listing("e" * 32, channels=("x", "y", "z"), scale=0.002, unit="m/s^2", rate=400))
+    relayed = opened(listing("e" * 32, channels=("x", "y", "z"), scale=0.002, unit="m/s^2", rate=400))
     source = relayed.sources()[0]
     assert source.units == "m/s^2" and source.dtype == np.float64
     counts = np.array([[1, -2, 300]] * 4)
@@ -121,24 +128,22 @@ def test_a_scaled_stream_keeps_its_counts():
     assert np.allclose(values, counts * 0.002) and np.array_equal(source.counts(values), counts)
 
 
-def test_listing_needs_the_token_when_the_relay_asks_for_one():
-    with FakeRelay(token=TOKEN) as relay:
+def test_listing_and_an_unreachable_relay():
+    with FakeRelay() as relay:
         relay.add(listing("f" * 32))
-        assert [s["capture_session_id"] for s in list_streams(relay.address, TOKEN)] == ["f" * 32]
-        with pytest.raises(RelayError, match="401"):
-            list_streams(relay.address, "mmps_wrong")
+        assert [s["session_id"] for s in list_streams(relay.address)] == ["f" * 32]
     with pytest.raises(RelayError, match="cannot be reached"):
         list_streams("127.0.0.1:9", timeout=1)
 
 
 def two_nodes(relay):
     """Node a, timed by its NTP UTC; node b, 0.25 s later in UTC, on another
-    timeline and timed by the gateway only. Both hear an impulse at UTC0 + 1 s."""
+    timeline and timed by the receiver only. Both hear an impulse at UTC0 + 1 s."""
     a, b = relay.add(listing("a" * 32)), relay.add(listing("b" * 32, utc=False))
-    relay.push(a["capture_session_id"], *node(2.0, mono0_us=10_000_000, utc_at_mono0_ns=UTC0, impulse_at=RATE))
-    relay.push(b["capture_session_id"], *node(2.0, mono0_us=500_000_000, utc_at_mono0_ns=UTC0 + 250_000_000,
+    relay.push(a["session_id"], *node(2.0, mono0_us=10_000_000, utc_at_mono0_ns=UTC0, impulse_at=RATE))
+    relay.push(b["session_id"], *node(2.0, mono0_us=500_000_000, utc_at_mono0_ns=UTC0 + 250_000_000,
                                               impulse_at=int(0.75 * RATE), utc_clock=None,
-                                              gateway_late_ns=30_000_000))
+                                              receiver_late_ns=30_000_000))
     return [a, b]
 
 
@@ -162,7 +167,7 @@ def test_two_nodes_land_on_one_utc_axis(tmp_path):
             t, v = session.streams[name].buffer.snapshot()
             hits.append(float(t[np.argmax(np.abs(v[:, 0]))]))
         assert hits[0] == pytest.approx(1.0, abs=1e-6), "node a by its own UTC"
-        assert hits[1] == pytest.approx(1.0 + 0.03, abs=1e-3), "node b by the gateway, 30 ms late"
+        assert hits[1] == pytest.approx(1.0 + 0.03, abs=1e-3), "node b by the receiver, 30 ms late"
 
         live.set_trim(names[1], -0.03)
         t, v = session.streams[names[1]].buffer.snapshot()
@@ -181,7 +186,7 @@ def test_two_nodes_land_on_one_utc_axis(tmp_path):
         assert a.meta["channel_names"] == ["S", "N", "W", "E"] and a.meta["sample_format"] == "s16"
         assert a.meta["clock"] == {"source": "ntp", "uncertainty_ns": 20_000_000, "from": "node",
                                    "trim_s": 0.0, "by_hand": False}
-        assert fragments[1].meta["clock"]["from"] == "gateway"
+        assert fragments[1].meta["clock"]["from"] == "receiver"
         assert fragments[1].meta["clock"]["trim_s"] == -0.03
 
         live.close(names[1])
@@ -192,7 +197,7 @@ def test_two_nodes_land_on_one_utc_axis(tmp_path):
 def test_an_ended_stream_keeps_what_it_held():
     with FakeRelay() as relay:
         item = relay.add(listing("a" * 32))
-        relay.push(item["capture_session_id"], *node(1.0, mono0_us=0, utc_at_mono0_ns=UTC0),
+        relay.push(item["session_id"], *node(1.0, mono0_us=0, utc_at_mono0_ns=UTC0),
                    event(990_000, {"kind": "stream_end", "end": "clean"}), msg("X"))
         session = Session()
         live = LiveStreams(session)
@@ -209,7 +214,7 @@ def feed(relayed, messages):
 
 
 def test_bundles_repeats_and_overlaps_are_taken_once():
-    relayed = RelayStream("unused", listing("g" * 32))
+    relayed = opened(listing("g" * 32))
     source = relayed.sources()[0]
     a, b = data(0, 0, tone(0, BLOCK)), data(BLOCK, 10_000, tone(BLOCK, BLOCK))
     feed(relayed, [clock((2, UTC0, 1000), (0, 0, 0)), msg("B", a + b), a,
@@ -221,7 +226,7 @@ def test_bundles_repeats_and_overlaps_are_taken_once():
 
 
 def test_a_sample_clock_off_its_nominal_rate_does_not_drift_from_the_timeline():
-    relayed = RelayStream("unused", listing("h" * 32))
+    relayed = opened(listing("h" * 32))
     source = relayed.sources()[0]
     true_rate = RATE * (1 + 100e-6)                    # 100 ppm fast
     blocks = []
@@ -239,27 +244,27 @@ def test_a_timeline_that_is_utc_is_taken_as_utc():
     item = listing("i" * 32, utc=False)
     item["clocks"][0] = {"id": 0, "name": "utc", "kind": "utc", "hz": 1_000_000_000, "timeline": True,
                          "source": "gnss_pps", "domain": "gnss"}
-    utc = RelayStream("unused", item).utc_offset()
+    utc = opened(item).utc_offset()
     assert (utc.offset, utc.source, utc.domain) == (0.0, "gnss_pps", "gnss")
 
 
 def test_the_surest_of_several_node_clocks_is_used():
     item = listing("j" * 32)
     item["clocks"].append({"id": 3, "name": "gps", "kind": "utc", "hz": 1_000_000_000, "source": "gnss"})
-    relayed = RelayStream("unused", item)
+    relayed = opened(item)
     feed(relayed, [clock((2, UTC0 + 5_000_000, 20_000_000), (3, UTC0, 1_000), (0, 0, 0)),
                    clock((2, UTC0 + 7_000_000, 20_000_000), (0, 0, 0))])
     utc = relayed.utc_offset()
     assert (utc.source, utc.offset, utc.uncertainty_s) == ("gnss", UTC0 / 1e9, pytest.approx(1e-6))
 
 
-def test_a_refused_watch_ends_with_why():
-    with FakeRelay(token=TOKEN) as relay:
-        item = relay.add(listing("k" * 32))
-        relayed = RelayStream(relay.address, item, "mmps_wrong")
+def test_a_watch_of_a_closed_stream_ends_with_why():
+    with FakeRelay() as relay:
+        item = listing("k" * 32)
+        relayed = RelayStream(relay.address, item)
         source = relayed.sources()[0].start()
         wait(lambda: relayed.state == "ended")
-        assert relayed.end.startswith("401")
+        assert relayed.end.startswith("404")
         source.stop()
     with pytest.raises(ValueError, match="no timeline"):
         RelayStream("unused", {**listing("l" * 32), "clocks": []})
@@ -270,7 +275,7 @@ def test_stop_and_start_intake_take_up_the_stream_again_with_one_reader():
 
     with FakeRelay() as relay:
         item = relay.add(listing("m" * 32))
-        relay.push(item["capture_session_id"], *node(1.0, mono0_us=0, utc_at_mono0_ns=UTC0))
+        relay.push(item["session_id"], *node(1.0, mono0_us=0, utc_at_mono0_ns=UTC0))
         session = Session()
         live = LiveStreams(session)
         (name,) = live.open(relay.address, [item])
@@ -280,7 +285,7 @@ def test_stop_and_start_intake_take_up_the_stream_again_with_one_reader():
         assert relayed.state == "stopped"
         session.start_intake()
         wait(lambda: relayed.state == "live")
-        relay.push(item["capture_session_id"], *node(2.0, mono0_us=0, utc_at_mono0_ns=UTC0)[-150:])
+        relay.push(item["session_id"], *node(2.0, mono0_us=0, utc_at_mono0_ns=UTC0)[-150:])
         wait(lambda: session.poll() is not None and len(session.streams[name].buffer) > 0)
         time.sleep(0.2)
         assert relayed.end == "" and relayed.state == "live"
@@ -292,7 +297,7 @@ def test_stop_and_start_intake_take_up_the_stream_again_with_one_reader():
 def test_a_correction_made_by_hand_is_kept_and_a_trim_takes_over_again():
     with FakeRelay() as relay:
         item = relay.add(listing("n" * 32))
-        relay.push(item["capture_session_id"], *node(1.0, mono0_us=0, utc_at_mono0_ns=UTC0))
+        relay.push(item["session_id"], *node(1.0, mono0_us=0, utc_at_mono0_ns=UTC0))
         session = Session()
         live = LiveStreams(session)
         (name,) = live.open(relay.address, [item])
@@ -312,7 +317,7 @@ def test_a_correction_made_by_hand_is_kept_and_a_trim_takes_over_again():
 def test_a_fragment_across_a_lost_block_is_split_there(tmp_path):
     with FakeRelay() as relay:
         item = relay.add(listing("o" * 32))
-        relay.push(item["capture_session_id"], *node(1.0, mono0_us=0, utc_at_mono0_ns=UTC0, skip_block=50))
+        relay.push(item["session_id"], *node(1.0, mono0_us=0, utc_at_mono0_ns=UTC0, skip_block=50))
         session = Session()
         live = LiveStreams(session)
         (name,) = live.open(relay.address, [item])
@@ -327,7 +332,7 @@ def test_a_fragment_across_a_lost_block_is_split_there(tmp_path):
 
 
 def test_jittered_block_times_do_not_leave_the_samples_late():
-    relayed = RelayStream("unused", listing("p" * 32))
+    relayed = opened(listing("p" * 32))
     source = relayed.sources()[0]
     rng = np.random.default_rng(5)
     blocks = []

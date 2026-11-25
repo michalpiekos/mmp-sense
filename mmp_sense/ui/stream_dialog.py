@@ -23,14 +23,18 @@ __all__ = ["OpenStreamDialog", "describe"]
 
 
 def describe(listing: dict) -> str:
-    """One line for a relayed session: its node, start, streams and whether the server keeps it."""
-    model = (listing.get("device") or {}).get("model") or "stream"
-    started = (listing.get("started_utc") or "")[11:19]
+    """One line for a relayed session: its node, start, streams and whether the receiver saves it."""
+    import datetime
+
+    node = listing.get("node") or (listing.get("device") or {}).get("model") or "stream"
+    ns = listing.get("started_utc_ns")
+    started = (datetime.datetime.fromtimestamp(ns / 1e9, datetime.timezone.utc).strftime("%H:%M:%S")
+               if isinstance(ns, int) else "")
     streams = ", ".join(
         f"{s['name']} {len(s.get('channels') or [])} ch {s.get('rate_hz', '')} Hz".replace(" ch  Hz", "")
         for s in listing.get("streams") or [] if s.get("kind") == "pcm")
-    kept = "stored" if listing.get("stored") else "relayed only"
-    return f"{model}  {listing['capture_session_id'][:8]}  since {started} UTC  {streams}  ({kept})"
+    kept = "saved" if listing.get("saved") else "relayed only"
+    return f"{node}  {listing['session_id'][:8]}  since {started} UTC  {streams}  ({kept})"
 
 
 class _Lister(QObject):
@@ -40,17 +44,15 @@ class _Lister(QObject):
 class OpenStreamDialog(QDialog):
     """Lists a relay's streams in the background; `chosen` are the ticked ones."""
 
-    def __init__(self, relay: str, token_for, parent=None) -> None:
+    def __init__(self, relay: str, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Open stream")
-        #: The token to send a relay, by its address: None for a relay that is not the server's.
-        self.token_for = token_for
         self.chosen: list[dict] = []
         #: The relay the list shown came from; Watch uses it, not the text edited since.
         self.listed_relay = ""
         self._request = 0
         self.relay = QLineEdit(relay)
-        self.relay.setToolTip("A gateway relay, HOST:PORT: the server's, or senselab-gateway's on a laptop")
+        self.relay.setToolTip("An mmp-stream relay, HOST:PORT: the server's, a laptop's, or this window's own (File > Receive streams)")
         self.relay.returnPressed.connect(self.refresh)
         again = QPushButton("Refresh")
         again.clicked.connect(self.refresh)
@@ -81,12 +83,11 @@ class OpenStreamDialog(QDialog):
         self.listed_relay = ""
         self._request += 1
         request, relay = self._request, self.relay.text().strip()
-        token = self.token_for(relay)
         lister = self._lister
 
         def ask():
             try:
-                result = (list_streams(relay, token), None)
+                result = (list_streams(relay), None)
             except (RelayError, ValueError, KeyError, TypeError) as exc:
                 result = (None, str(exc) or type(exc).__name__)
             try:

@@ -28,7 +28,7 @@ def timing(live) -> str:
     utc = live.relayed.utc_offset()
     if utc is None:
         return "waiting for UTC"
-    where = "gateway arrival" if utc.source == "gateway" else f"node {utc.source}"
+    where = "receiver arrival" if utc.source == "receiver" else f"node {utc.source}"
     if utc.uncertainty_s is None:
         return f"{where} (UTC timeline)"
     return f"{where} ±{utc.uncertainty_s * 1e3:.0f} ms"

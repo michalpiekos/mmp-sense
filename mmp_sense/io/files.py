@@ -5,7 +5,7 @@
     read_file("accel.wav", scale=0.0024)   a sensor's WAV, in m/s^2
     read_file("table.tsv")                 a column per channel
     read_file("capture.npy", rate=400)     an array, with its rate
-    read_file("export/<session>")          a session srv-senselab exported with --raw
+    read_file("<session folder>")          a session folder: mmp-stream receiver, srv-senselab export
 
 The format is told by the file's first bytes where it has a signature
 (MCAP, WAV, NumPy), else by its suffix, else -- text -- as delimited
@@ -14,7 +14,6 @@ columns.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 from ..core.data import TimeSeries
@@ -22,7 +21,7 @@ from .arrays import NUMPY_SUFFIXES, read_numpy
 from .audio import AUDIO_SUFFIXES, is_sensor_wav, read_audio, read_sensor_wav
 from .csv import TEXT_SUFFIXES, read_timeseries
 from .mcap import MAGIC, plottable_topics, read_mcap, read_mcap_topics, topics_in
-from .session_export import is_session_folder, read_session_folder
+from .session_folder import is_session_folder, read_session_folder
 
 __all__ = ["read_file", "kind_of", "FileFormatError", "FILE_KINDS"]
 
@@ -33,16 +32,8 @@ FILE_KINDS = {
     "audio": "compressed audio, decoded by ffmpeg",
     "array": "a NumPy .npy or .npz",
     "text": "delimited text: CSV, TSV, whitespace",
-    "session": "a session folder of `sample export --raw`: its streams, mic names and clocks",
+    "session": "a session folder (session.json): its streams, mic names and clocks",
 }
-
-#: srv-senselab's clip export names its files <session>_<stream>_<span>.
-_STREAM_UNITS = {
-    "accelerometer": "m/s^2",
-    "gyroscope": "rad/s",
-    "magnetometer": "uT",
-}
-
 
 class FileFormatError(ValueError):
     """A file that is none of the formats read here."""
@@ -112,8 +103,6 @@ def read_file(
         series = read_numpy(path, rate)
     else:
         series = read_timeseries(path, rate=rate)
-        if not series.units:
-            series.units = _stream_units(path)
     if series.n_channels == 0:
         raise ValueError(f"{path}: no numeric columns besides time")
     if units is not None:
@@ -132,13 +121,6 @@ def _read_mcap(path: Path, topics: list[str]) -> list[TimeSeries]:
         return [read_mcap(data, topics[0] if topics else None, catalog=catalog)]
     except (KeyError, ValueError) as exc:
         raise ValueError(f"{path}: {exc.args[0] if exc.args else exc}") from None
-
-
-def _stream_units(path: Path) -> str:
-    for part in re.split(r"[_\W]+", path.stem.lower()):
-        if part in _STREAM_UNITS:
-            return _STREAM_UNITS[part]
-    return ""
 
 
 def _is_text(head: bytes) -> bool:

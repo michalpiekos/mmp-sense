@@ -110,7 +110,7 @@ class WorkspaceDock(QWidget):
             self.tags.setText(", ".join(recording.tags) if recording else "")
             self.started.setText(recording.started_at_utc if recording else "")
             self.notes.setPlainText(recording.notes if recording else "")
-            fixed = recording is not None and (recording.origin == "server" or recording.sync.declared)
+            fixed = recording is not None and (recording.origin == "session" or recording.sync.context_tried is not None)
             self.started.setReadOnly(fixed)
             self.state.setText(_state(recording) if recording else "")
         finally:
@@ -132,21 +132,17 @@ def _line(recording) -> str:
     marks = []
     if not recording.saved:
         marks.append("unsaved")
-    if recording.origin == "server":
-        marks.append("from the server")
-    elif recording.sync.closed:
+    if recording.sync.context_sent is not None:
         marks.append("on the server")
     return recording.label + (f"  ({', '.join(marks)})" if marks else "")
 
 
 def _state(recording) -> str:
-    if recording.origin == "server":
-        return f"From srv-senselab session {recording.server_session_id}; not sent again."
     sync = recording.sync
-    if sync.closed:
+    if sync.context_sent is not None:
         changed = recording.context() != sync.context_sent
         return ("On the server" + ("; changed metadata to send" if changed else "")
-                + f" as session {sync.capture_session_id}.")
-    if sync.declared:
+                + f" as session {sync.session_id}.")
+    if sync.context_tried is not None:
         return "Partly sent; Synchronize again to finish."
     return "Not on the server yet."

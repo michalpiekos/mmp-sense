@@ -60,13 +60,13 @@ class LiveStreams:
         #: UTC seconds of the shared axis's zero; set by the first stream that knows UTC.
         self.epoch: float | None = None
 
-    def open(self, relay: str, listings: list[dict], token: str | None = None, *,
+    def open(self, relay: str, listings: list[dict], *,
              history_s: float = HISTORY_S, replace: bool = True) -> list[str]:
         """Watch these relayed sessions: a stream each of their PCM streams.
         `replace` drops what the session held before (a file, other streams)."""
         sources = []
         for listing in listings:
-            relayed = RelayStream(relay, listing, token)
+            relayed = RelayStream(relay, listing)
             sources += [(relayed, s, len(relayed.pcm) > 1) for s in relayed.sources()]
         if not sources:
             raise ValueError("no PCM stream among those to watch")

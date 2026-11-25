@@ -1,5 +1,6 @@
-"""An in-process stand-in for a gateway's relay (srv-senselab protocol/stream.md, "Relay"):
-`GET /live` lists the sessions, `GET /live/{id}` sends a session's messages."""
+"""An in-process stand-in for an mmp-stream receiver's relay (format 3), whose every message a
+test writes itself: `GET /live` lists the sessions, `GET /live/{id}` sends a session's messages.
+tests/test_live_ui.py runs the real receiver too."""
 
 from __future__ import annotations
 
@@ -12,8 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 
 HEADER = struct.Struct("<BBHI")
-TOKEN = "mmps_relay_token"
-GATEWAY_CLOCK = 255
+RECEIVER_CLOCK = 255
 
 
 def msg(kind: str, body: bytes = b"", stream: int = 0, flags: int = 0) -> bytes:
@@ -42,34 +42,34 @@ def listing(sid: str, *, model="tetrahedral", channels=("S", "N", "W", "E"), fmt
               {"id": 1, "name": "i2s", "kind": "sample", "hz": rate}]
     if utc:
         clocks.append({"id": 2, "name": "utc", "kind": "utc", "hz": 1_000_000_000, "source": "ntp"})
-    clocks.append({"id": GATEWAY_CLOCK, "name": "gateway", "kind": "utc", "hz": 1_000_000_000,
-                   "source": "ntp", "domain": "ntp:stream-gateway"})
     stream = {"id": 1, "name": "mics", "kind": "pcm", "sample_clock": 1, "rate_hz": rate, "format": fmt,
               "channels": [{"name": c, **({"scale": scale} if scale else {}), **({"unit": unit} if unit else {})}
                            for c in channels]}
     if valid_bits:
         stream["valid_bits"] = valid_bits
-    return {"capture_session_id": sid, "source_id": None, "device": {"model": model}, "trigger": None,
-            "transport": "tcp", "stored": False, "started_utc": "2026-11-15T08:00:00.000Z",
+    return {"session_id": sid, "node": model, "device": {"model": model}, "trigger": None, "title": None,
+            "tags": [], "saved": False, "started_utc_ns": 1_794_729_600_000_000_000,
             "clocks": clocks, "streams": [stream]}
 
 
 def hello(item: dict) -> bytes:
-    return msg("H", json.dumps({"v": 2, "clocks": item["clocks"], "streams": item["streams"],
-                                "relay": {"capture_session_id": item["capture_session_id"],
-                                          "gateway_clock": GATEWAY_CLOCK}}).encode())
+    receiver = {"id": RECEIVER_CLOCK, "name": "receiver", "kind": "utc", "hz": 1_000_000_000,
+                "source": "ntp", "domain": "ntp:mmp-stream-receiver"}
+    return msg("H", json.dumps({"v": 3, "node": item["node"], "clocks": item["clocks"] + [receiver],
+                                "streams": item["streams"],
+                                "relay": {"session_id": item["session_id"], "saved": False,
+                                          "receiver_clock": RECEIVER_CLOCK}}).encode())
 
 
 class FakeRelay:
     """`sessions[id] = listing`; `push(id, bytes)` sends to that session's
     watchers (and to later ones); `end(id)` closes it."""
 
-    def __init__(self, token: str | None = None) -> None:
-        self.token = token
+    def __init__(self) -> None:
         self.sessions: dict[str, dict] = {}
         self.sent: dict[str, list[bytes]] = {}
         self.watchers: dict[str, list[queue.Queue]] = {}
-        self.requests: list[tuple[str, str | None]] = []
+        self.requests: list[str] = []
         self._lock = threading.Lock()
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._server.daemon_threads = True
@@ -87,8 +87,8 @@ class FakeRelay:
         self._server.server_close()
 
     def add(self, item: dict) -> dict:
-        self.sessions[item["capture_session_id"]] = item
-        self.sent[item["capture_session_id"]] = [hello(item)]
+        self.sessions[item["session_id"]] = item
+        self.sent[item["session_id"]] = [hello(item)]
         return item
 
     def push(self, sid: str, *messages: bytes) -> None:
@@ -126,16 +126,12 @@ class FakeRelay:
                 self.wfile.flush()
 
             def do_GET(self):
-                auth = self.headers.get("Authorization")
-                token = auth.removeprefix("Bearer ") if auth else None
-                fake.requests.append((self.path, token))
-                if fake.token and token != fake.token:
-                    return self._json(401, {"error": {"code": "unauthorized", "message": "a source token is needed"}})
+                fake.requests.append(self.path)
                 if self.path == "/live":
                     return self._json(200, {"streams": list(fake.sessions.values())})
                 sid = self.path.removeprefix("/live/")
                 if sid not in fake.sessions:
-                    return self._json(404, {"error": {"code": "not_found", "message": "no such live stream"}})
+                    return self._json(404, {"error": "not_found", "message": "no such open stream"})
                 q: queue.Queue = queue.Queue()
                 with fake._lock:
                     for m in fake.sent[sid]:

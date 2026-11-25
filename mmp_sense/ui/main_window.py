@@ -1063,6 +1063,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         self.timer.stop()
         self.player.stop(quietly=True)
+        self.live.stop_receiving()
         self.bridge.close()
         if self.listener is not None:
             self.listener.stop()

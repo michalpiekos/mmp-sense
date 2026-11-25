@@ -85,9 +85,9 @@ def _write(live, name, entry, time, values, folder) -> Fragment:
     if utc is None:
         clock = {"source": "unknown", "from": "none"}
     else:
-        clock = {"source": "ntp" if utc.source == "gateway" else utc.source,
+        clock = {"source": "ntp" if utc.source == "receiver" else utc.source,
                  "uncertainty_ns": None if utc.uncertainty_s is None else int(round(utc.uncertainty_s * 1e9)),
-                 "from": "gateway" if utc.source == "gateway" else "node"}
+                 "from": "receiver" if utc.source == "receiver" else "node"}
         if utc.domain and not entry.trim and not entry.by_hand:
             clock["domain"] = utc.domain               # a start moved by hand is no longer that clock's
     clock["trim_s"] = entry.trim

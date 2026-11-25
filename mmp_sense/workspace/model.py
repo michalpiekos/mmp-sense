@@ -19,7 +19,6 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from ..io.files import kind_of
-from ..io.session_export import is_session_folder
 
 __all__ = ["Workspace", "Recording", "SyncState", "WorkspaceError", "is_workspace",
            "WORKSPACE_FILE", "FORMAT"]
@@ -50,22 +49,20 @@ def utc_text(when: datetime.datetime) -> str:
 
 @dataclass
 class SyncState:
-    """What srv-senselab has of a recording, and the IDs it is known by there."""
+    """What srv-senselab has of a recording: the session it is there, and which context."""
 
-    capture_session_id: str = field(default_factory=_new_id)
-    sample_id: str = field(default_factory=_new_id)
-    declared: bool = False
-    uploaded: bool = False
-    closed: bool = False
-    #: The last context revision sent, and what it said; `context_sent` once acknowledged.
-    context_revision: int = 0
+    #: The session's id on the server: a received session's own, else the recording's.
+    session_id: str = ""
+    #: The manifest revision sent last; a changed title, tags or notes goes out as the next one.
+    revision: int = 0
     context_tried: dict | None = None
+    #: The context the server holds, once it answered with nothing missing.
     context_sent: dict | None = None
 
 
 @dataclass
 class Recording:
-    """One opened file, or one srv-senselab export folder."""
+    """One opened file, or one session folder (a received stream, an srv-senselab export)."""
 
     name: str
     kind: str
@@ -77,10 +74,8 @@ class Recording:
     duration_s: float | None = None
     #: How the file is read: read_file's topics, rate, scale and units.
     options: dict = field(default_factory=dict)
-    #: "file", or "server" for an export: already on srv-senselab, so never sent.
+    #: "file", or "session" for a session folder, which is sent as the session it is.
     origin: str = "file"
-    #: The capture session an export came from.
-    server_session_id: str | None = None
     sync: SyncState = field(default_factory=SyncState)
     #: What the file cannot say itself: for a live fragment, its channel names,
     #: sample format, node, relayed session and clock.
@@ -98,7 +93,7 @@ class Recording:
 
     def context(self) -> dict:
         """The title, tags and notes as srv-senselab's session context holds them."""
-        return {"title": self.title, "tags": sorted(set(self.tags)), "capture_notes": self.notes}
+        return {"title": self.title, "tags": sorted(set(self.tags)), "notes": self.notes}
 
     def to_json(self) -> dict:
         data = asdict(self)
@@ -185,10 +180,26 @@ class Workspace:
                               source=path)
         recording.started_at_utc = _started_at(path, series)
         recording.duration_s = _duration(series)
-        if kind == "session":
-            recording.origin = "server"
-            recording.server_session_id = series[0].metadata.get("capture_session_id") if series else None
+        if kind == "session" and series:
+            meta = series[0].metadata
+            recording.origin = "session"
+            recording.sync.session_id = str(meta.get("session_id") or "")
+            recording.title = meta.get("session_title") or recording.title
+            recording.tags = list(meta.get("session_tags") or [])
+            recording.notes = meta.get("session_notes") or ""
         self.recordings.append(recording)
+        return recording
+
+    def adopt(self, folder, series=None) -> Recording:
+        """Take in a session folder by moving it into the workspace, saved: a received stream,
+        which need not be copied. In an untitled workspace it stays where it is, unsaved."""
+        recording = self.add(folder, series=series)
+        if self.folder is not None:
+            home = self._home(recording)
+            home.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(recording.source), str(home / recording.name))
+            recording.source = None
+            self.save()
         return recording
 
     def get(self, recording_id: str) -> Recording:
@@ -253,7 +264,8 @@ class Workspace:
         self.id = _new_id()
         for recording, source in zip(self.recordings, sources):
             recording.id = _new_id()
-            recording.sync = SyncState()
+            # A session folder's copy is a session of its own, so it does not contest the original's context.
+            recording.sync = SyncState(session_id=_new_id() if recording.origin == "session" else "")
             self._copy_in(recording, source)
             recording.source = None
         self.save()
@@ -264,10 +276,6 @@ class Workspace:
         target = home / recording.name
         if source.is_dir():
             shutil.copytree(source, target, dirs_exist_ok=True)
-            # An export folder is read with the manifest beside it.
-            manifest = source.parent / "manifest.json"
-            if is_session_folder(source) and manifest.is_file():
-                shutil.copy2(manifest, home / "manifest.json")
         else:
             shutil.copy2(source, target)
 

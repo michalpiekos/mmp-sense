@@ -1,7 +1,7 @@
-"""Live streams from a srv-senselab gateway's relay (its protocol/stream.md, "Relay").
+"""Live streams from an mmp-stream receiver's relay (stream format 3; mmp-stream's README, "Relay").
 
-    relayed = list_streams("192.168.1.2:8091", token)      # what is open now
-    stream = RelayStream("192.168.1.2:8091", relayed[0], token)
+    relayed = list_streams("192.168.1.2:8091")             # what is open now
+    stream = RelayStream("192.168.1.2:8091", relayed[0])
     sources = stream.sources()                             # a Source per PCM stream
 
 One HTTP response carries a whole relayed session; a reader thread splits it
@@ -40,7 +40,7 @@ PCM_FORMATS = {"u8": (1, 128.0), "s16": (2, 32768.0), "s24": (3, 8388608.0),
 OBSERVATIONS = 30
 #: A source hands nothing over until it knows UTC, or this long after its first block.
 HOLD_S = 3.0
-#: Connecting, and waiting for the next message: beyond the gateway's own 15 s without data.
+#: Connecting, and waiting for the next message: beyond the receiver's own 15 s without data.
 TIMEOUT_S = 30.0
 #: Blocks the timeline is fitted against the frame counter over, and how often it is refitted.
 FIT_BLOCKS = 6000
@@ -48,7 +48,7 @@ FIT_EVERY = 100
 FIT_MIN = 100
 #: How far, in samples, one block may move against the last to follow a refit.
 SLEW = 0.25
-GATEWAY_DOMAIN = "ntp:stream-gateway"
+RECEIVER_DOMAIN = "ntp:mmp-stream-receiver"
 
 
 class RelayError(Exception):
@@ -62,14 +62,12 @@ def relay_url(relay: str, path: str = "") -> str:
     return relay + path
 
 
-def _request(relay: str, path: str, token: str | None, timeout: float | None):
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
+def _request(relay: str, path: str, timeout: float | None):
     try:
-        return urllib.request.urlopen(urllib.request.Request(relay_url(relay, path), headers=headers),
-                                      timeout=timeout)
+        return urllib.request.urlopen(relay_url(relay, path), timeout=timeout)
     except urllib.error.HTTPError as exc:
         try:
-            message = json.loads(exc.read() or b"{}").get("error", {}).get("message", "")
+            message = json.loads(exc.read() or b"{}").get("message", "")
         except ValueError:
             message = ""
         raise RelayError(f"{exc.code}: {message or exc.reason}") from None
@@ -78,9 +76,9 @@ def _request(relay: str, path: str, token: str | None, timeout: float | None):
         raise RelayError(f"{relay} cannot be reached ({reason})") from None
 
 
-def list_streams(relay: str, token: str | None = None, timeout: float = 5.0) -> list[dict]:
+def list_streams(relay: str, timeout: float = 5.0) -> list[dict]:
     """The streams open on a relay now, as its `GET /live` lists them."""
-    with _request(relay, "/live", token, timeout) as res:
+    with _request(relay, "/live", timeout) as res:
         return json.loads(res.read())["streams"]
 
 
@@ -91,9 +89,9 @@ class Utc:
     offset: float
     #: How sure, in seconds; None when not known (a UTC timeline declares none).
     uncertainty_s: float | None
-    #: The clock it came from: ntp, gnss, gnss_pps, phone or unknown, or "gateway".
+    #: The clock it came from: ntp, gnss, gnss_pps, phone or unknown, or "receiver".
     source: str
-    #: The clock's domain, if it declares one; the gateway's is ntp:stream-gateway.
+    #: The clock's domain, if it declares one; the receiver's is ntp:mmp-stream-receiver.
     domain: str | None = None
 
 
@@ -176,10 +174,9 @@ def encode(counts: np.ndarray, fmt: str) -> bytes:
 class RelayStream:
     """One relayed session: its declaration, its PCM streams and how it is timed."""
 
-    def __init__(self, relay: str, listing: dict, token: str | None = None) -> None:
+    def __init__(self, relay: str, listing: dict) -> None:
         self.relay = relay
-        self.token = token
-        self.id = listing["capture_session_id"]
+        self.id = listing["session_id"]
         self.listing = listing
         self.device = listing.get("device") or {}
         self.clocks = {c["id"]: c for c in listing.get("clocks") or []}
@@ -194,13 +191,11 @@ class RelayStream:
             scales = [c.get("scale") for c in s["channels"]]
             scale = np.array([x if x is not None else 1.0 for x in scales]) if any(scales) else None
             self.pcm[s["id"]] = _Pcm(s, width, full, len(s["channels"]), scale)
-        #: (utc seconds - timeline seconds, uncertainty s): per UTC clock of the node, and the gateway's.
+        #: (utc seconds - timeline seconds, uncertainty s): per UTC clock of the node, and the receiver's.
         self._device: dict[int, deque] = {}
-        self._gateway: deque = deque(maxlen=OBSERVATIONS)
-        #: The clock the relay adds for its arrival times; its hello names it, the listing shows it.
-        self.gateway_clock: int | None = next(
-            (c["id"] for c in self.clocks.values()
-             if c.get("domain") == "ntp:stream-gateway" and c.get("name", "").startswith("gateway")), None)
+        self._receiver: deque = deque(maxlen=OBSERVATIONS)
+        #: The clock the relay adds for its arrival times; the relayed hello names it.
+        self.receiver_clock: int | None = None
         #: connecting, live, or ended; `end` says why it ended.
         self.state = "connecting"
         self.end = ""
@@ -216,7 +211,7 @@ class RelayStream:
 
     @property
     def node(self) -> str:
-        return self.device.get("model") or "stream"
+        return self.listing.get("node") or self.device.get("node") or self.device.get("model") or "stream"
 
     def sources(self) -> list["RelaySource"]:
         return [RelaySource(self, sid) for sid in self.pcm]
@@ -259,7 +254,7 @@ class RelayStream:
 
     def _run(self, generation: int) -> None:
         try:
-            response = _request(self.relay, f"/live/{self.id}", self.token, TIMEOUT_S)
+            response = _request(self.relay, f"/live/{self.id}", TIMEOUT_S)
         except RelayError as exc:
             self._finish(str(exc), generation)
             return
@@ -296,7 +291,7 @@ class RelayStream:
         """Takes one relayed message; True once the stream has ended."""
         if kind == "H":
             hello = json.loads(body)
-            self.gateway_clock = (hello.get("relay") or {}).get("gateway_clock", self.gateway_clock)
+            self.receiver_clock = (hello.get("relay") or {}).get("receiver_clock", self.receiver_clock)
             self.clocks.update({c["id"]: c for c in hello.get("clocks") or []})
             with self._lock:
                 self.state = "live"
@@ -379,14 +374,14 @@ class RelayStream:
             if decl is None or decl.get("kind") != "utc" or clock == self.timeline["id"]:
                 continue
             entry = (value / float(decl["hz"]) - t_s, max(unc, timeline[1]) / 1e9)
-            if clock == self.gateway_clock:
-                self._gateway.append(entry)
+            if clock == self.receiver_clock:
+                self._receiver.append(entry)
             else:
                 self._device.setdefault(clock, deque(maxlen=OBSERVATIONS)).append(entry)
 
     def utc_offset(self) -> Utc | None:
         """How the timeline relates to UTC: itself, when it is a UTC clock; else
-        the node's surest UTC clock; else the gateway's arrival times; None
+        the node's surest UTC clock; else the receiver's arrival times; None
         before any is seen."""
         tl = self.timeline
         if tl.get("kind") == "utc":
@@ -401,10 +396,10 @@ class RelayStream:
                     best = utc
         if best is not None:
             return best
-        if self._gateway:
-            entries = list(self._gateway)
+        if self._receiver:
+            entries = list(self._receiver)
             return Utc(statistics.median(e[0] for e in entries), statistics.median(e[1] for e in entries),
-                       "gateway", GATEWAY_DOMAIN)
+                       "receiver", RECEIVER_DOMAIN)
         return None
 
 
@@ -494,7 +489,7 @@ class RelaySource(Source):
 
     def describe(self) -> dict:
         info = super().describe()
-        info.update(relay=self.relayed.relay, capture_session_id=self.relayed.id,
+        info.update(relay=self.relayed.relay, session_id=self.relayed.id,
                     node=self.relayed.node, state=self.relayed.state, end=self.relayed.end,
                     lost_frames=self.pcm.lost_frames)
         return info

@@ -1,76 +1,74 @@
-"""Sending a workspace's recordings to srv-senselab, over ingestion protocol 0.1.
+"""Sending a workspace's recordings to srv-senselab (its HTTP API /v1).
 
-Each recording is a capture session of its own holding one sample: the file
-as it is. A recording's title, tags and notes are its session's context.
-Every step is idempotent on the server, so a Synchronize that stopped part
-way is simply run again: an upload resumes from the part the server has.
-
-The token is a source token (`sample source create --type import`). It is
-kept in the user's config, never in the workspace.
+Each recording is one session. A session folder (a received stream, an export) is
+sent as the session it is, with its own session.json; any other recording becomes a
+session holding its one file. Its title, tags and notes go in the manifest, and a
+changed context is sent as the next revision. Every step is idempotent on the
+server, so a Synchronize that stopped part way is simply run again: an upload
+resumes from the offset the server has. No credentials: run the server on a LAN or
+behind WireGuard.
 """
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
-import os
+import re
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from .model import Recording, Workspace, WorkspaceError
 
-__all__ = ["synchronize", "SyncResult", "ApiError", "Client", "load_token", "store_token", "forget_token",
-           "credentials_path", "declaration_of"]
+__all__ = ["synchronize", "SyncResult", "ApiError", "Client", "manifest_of", "PART_BYTES"]
 
-PROTOCOL = "/v0.1"
+API = "/v1"
+PART_BYTES = 8 << 20
+#: Recording ids that are not UUIDs get a stable one in this namespace.
+NAMESPACE = uuid.UUID("6f1c4c1e-9a52-4a8e-9a39-3d0f3b8a0c57")
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_SAFE = re.compile(r"[^A-Za-z0-9_.+-]")
 
 
 class ApiError(Exception):
     def __init__(self, status: int, body) -> None:
         self.status = status
-        error = body.get("error", {}) if isinstance(body, dict) else {}
-        self.code = error.get("code")
-        self.retryable = bool(error.get("retryable", False))
-        self.details = error.get("details") or {}
-        super().__init__(f"HTTP {status} {self.code}: {error.get('message', body)}")
+        body = body if isinstance(body, dict) else {}
+        self.code = body.get("error")
+        self.body = body
+        super().__init__(f"HTTP {status} {self.code}: {body.get('message', '')}")
 
 
 class Client:
-    """The few protocol calls a workspace needs, retried where the server says so."""
+    """The few calls a workspace needs, retried when the server cannot be reached."""
 
-    def __init__(self, server: str, token: str, *, attempts: int = 4, timeout: float = 60.0,
-                 pause=time.sleep) -> None:
-        self.base = server.rstrip("/") + PROTOCOL
-        self._token = token
+    def __init__(self, server: str, *, attempts: int = 4, timeout: float = 60.0, pause=time.sleep) -> None:
+        self.server = server.rstrip("/")
+        self.base = self.server + API
         self.attempts = attempts
         self.timeout = timeout
         self._pause = pause
 
-    def call(self, method: str, path: str, body=None, raw: bytes | None = None):
+    def call(self, method: str, path: str, body=None, raw: bytes | None = None, headers: dict | None = None):
         data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
-        headers = {"Authorization": f"Bearer {self._token}"}
+        headers = dict(headers or {})
         if data is not None:
-            headers["Content-Type"] = "application/octet-stream" if raw is not None else "application/json"
+            headers.setdefault("Content-Type", "application/octet-stream" if raw is not None else "application/json")
         for attempt in range(self.attempts):
             request = urllib.request.Request(self.base + path, data=data, method=method, headers=headers)
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     return json.loads(response.read() or b"null")
             except urllib.error.HTTPError as exc:
-                payload = exc.read()
                 try:
-                    parsed = json.loads(payload)
+                    parsed = json.loads(exc.read() or b"{}")
                 except ValueError:
-                    parsed = {"error": {"message": payload.decode(errors="replace")[:200]}}
-                error = ApiError(exc.code, parsed)
-                if not error.retryable or attempt == self.attempts - 1:
-                    raise error from None
-                wait = exc.headers.get("Retry-After")
-                self._pause(float(wait) if wait else 2 ** attempt)
+                    parsed = {}
+                raise ApiError(exc.code, parsed) from None
             except (urllib.error.URLError, ConnectionError, TimeoutError):
                 if attempt == self.attempts - 1:
                     raise
@@ -87,9 +85,9 @@ class SyncResult:
 
 
 def synchronize(workspace: Workspace, client: Client, progress=None) -> list[SyncResult]:
-    """Send every saved recording that is not on the server yet, and every
-    changed context; writes the workspace after each recording so what was
-    sent is remembered. `progress(recording, text)` hears each step."""
+    """Send every saved recording that is not on the server yet, and every changed
+    context; writes the workspace after each recording so what was sent is
+    remembered. `progress(recording, text)` hears each step."""
     if workspace.folder is None:
         raise WorkspaceError("the workspace is untitled; create it in a folder first")
     tell = progress or (lambda _r, _t: None)
@@ -99,22 +97,16 @@ def synchronize(workspace: Workspace, client: Client, progress=None) -> list[Syn
         if unreachable is not None:
             results.append(SyncResult(recording, "failed", f"not tried: {unreachable}"))
             continue
-        if recording.origin == "server":
-            results.append(SyncResult(recording, "skipped", "already on the server"))
-            continue
         if not recording.saved:
             results.append(SyncResult(recording, "skipped", "not saved"))
             continue
         try:
-            outcome = _send(workspace, recording, client, tell)
-            results.append(SyncResult(recording, outcome))
+            results.append(SyncResult(recording, _send(workspace, recording, client, tell)))
         except urllib.error.URLError as exc:
-            unreachable = f"{client.base} cannot be reached ({exc.reason})"
+            unreachable = f"{client.server} cannot be reached ({exc.reason})"
             results.append(SyncResult(recording, "failed", unreachable))
         except ApiError as exc:
             results.append(SyncResult(recording, "failed", str(exc), exc.status))
-            if exc.status == 401:
-                unreachable = "the server does not accept the token"
         except (OSError, ValueError) as exc:
             results.append(SyncResult(recording, "failed", str(exc)))
         finally:
@@ -124,149 +116,123 @@ def synchronize(workspace: Workspace, client: Client, progress=None) -> list[Syn
 
 def _send(workspace: Workspace, recording: Recording, client: Client, tell) -> str:
     sync = recording.sync
-    session = sync.capture_session_id
-    path = workspace.path_of(recording)
-    new = not sync.closed
-    if not sync.declared:
-        tell(recording, "declaring the session")
-        client.call("PUT", f"/capture-sessions/{session}", _session(workspace, recording))
-        sync.declared = True
-    sent_context = _send_context(recording, client, tell)
-    if not sync.uploaded:
-        declaration = declaration_of(recording, path)
-        tell(recording, "uploading")
-        upload = client.call("POST", "/uploads", declaration)
-        if upload["state"] != "received":
-            upload = _send_parts(client, upload, path, recording, tell)
-            upload = client.call("POST", f"/uploads/{upload['upload_id']}/complete")
-        sync.uploaded = upload["state"] == "received"
-        if not sync.uploaded:
-            raise ValueError(f"the upload ended {upload['state']}")
-    if not sync.closed:
-        tell(recording, "closing the session")
-        state = client.call("POST", f"/capture-sessions/{session}/close",
-                            {"duration_ns": _duration_ns(recording), "sample_ids": [sync.sample_id]})
-        if state.get("missing_samples"):
-            raise ValueError(f"the server is missing {state['missing_samples']}")
-        sync.closed = True
-    if new:
-        return "sent"
-    return "context" if sent_context else "up to date"
-
-
-def _send_context(recording: Recording, client: Client, tell) -> bool:
-    sync = recording.sync
     context = recording.context()
-    if context == sync.context_sent:
-        return False
+    if sync.context_sent == context:
+        return "up to date"
+    new = sync.context_sent is None
     if context != sync.context_tried:
-        sync.context_revision += 1
+        if sync.context_tried is not None:
+            sync.revision += 1
         sync.context_tried = context
-    tell(recording, "sending the title, tags and notes")
-    client.call("PUT", f"/capture-sessions/{sync.capture_session_id}/context",
-                {"revision": sync.context_revision, "tag_policy_version": 1, **context})
+    manifest, folder = manifest_of(workspace, recording)
+    tell(recording, "sending the session")
+    sent = {**manifest, "files": [{k: v for k, v in f.items() if k != "source"} for f in manifest["files"]]}
+    answer = client.call("PUT", f"/sessions/{manifest['id']}", sent)
+    by_sha = {f["sha256"]: f for f in manifest["files"]}
+    for sha in answer.get("missing", []):
+        entry = by_sha.get(sha)
+        if entry is None:
+            continue                                # a file an earlier revision listed; not this one's to send
+        _upload(client, folder / entry["source"], sha, entry["size"], recording, tell)
+    missing = client.call("GET", f"/sessions/{manifest['id']}").get("missing", [])
+    if any(sha in by_sha for sha in missing):
+        raise ValueError(f"the server still lacks {len(missing)} file(s)")
     sync.context_sent = context
-    return True
+    return "sent" if new else "context"
 
 
-def _send_parts(client: Client, upload: dict, path: Path, recording: Recording, tell) -> dict:
-    size = upload["part_size_bytes"]
+def _upload(client: Client, path: Path, sha: str, size: int, recording: Recording, tell) -> None:
+    state = client.call("GET", f"/uploads/{sha}")
+    offset = state.get("offset", 0)
     with open(path, "rb") as file:
-        while upload["next_part"] < upload["total_parts"]:
-            part = upload["next_part"]
-            tell(recording, f"uploading part {part + 1} of {upload['total_parts']}")
-            file.seek(part * size)
+        while not state.get("complete"):
+            tell(recording, f"uploading {path.name}: {offset * 100 // max(size, 1)}%")
+            file.seek(offset)
+            chunk = file.read(PART_BYTES)
+            span = f"bytes {offset}-{offset + len(chunk) - 1}/{size}" if chunk else f"bytes */{size}"
             try:
-                upload = client.call("PUT", f"/uploads/{upload['upload_id']}/parts/{part}",
-                                     raw=file.read(size))
+                state = client.call("PUT", f"/uploads/{sha}", raw=chunk, headers={"Content-Range": span})
             except ApiError as exc:
-                if exc.code != "part_out_of_order":
+                if exc.status != 409 or "offset" not in exc.body:
                     raise
-                upload = client.call("GET", f"/uploads/{upload['upload_id']}")
-    return upload
+                state = exc.body
+            offset = state.get("offset", 0)
 
 
-def _session(workspace: Workspace, recording: Recording) -> dict:
+def session_id_of(recording: Recording) -> str:
+    """The session a recording is on the server: its own once set, else the recording's id
+    when that is a UUID, else a stable one made from it."""
+    if not recording.sync.session_id:
+        rid = recording.id.lower()
+        recording.sync.session_id = rid if _UUID.fullmatch(rid) else str(uuid.uuid5(NAMESPACE, rid))
+    return recording.sync.session_id
+
+
+def manifest_of(workspace: Workspace, recording: Recording) -> tuple[dict, Path]:
+    """The session.json to send for a recording, and the folder its files are read from.
+    Each file entry carries `source`, its name in that folder."""
     from .. import __version__
 
-    return {
-        "schema_version": 1,
-        "capture_session_id": recording.sync.capture_session_id,
-        "started_at_utc": recording.started_at_utc,
-        "clock": _clock(recording),
-        "trigger": {"type": "manual", "reason": "mmp-sense workspace"},
+    path = workspace.path_of(recording)
+    sid = session_id_of(recording)
+    revised = int(time.time() * 1000)
+    if recording.origin == "session":
+        from ..io.session_folder import SESSION_FILE
+
+        m = json.loads((path / SESSION_FILE).read_text())
+        base = int(m.get("revision", 0))
+        if recording.sync.revision < base:
+            recording.sync.revision = base
+        changed = (m.get("title", ""), sorted(set(m.get("tags") or [])), m.get("notes", "")) != (
+            recording.title, sorted(set(recording.tags)), recording.notes)
+        if changed and recording.sync.revision == base:
+            recording.sync.revision = base + 1
+        m.update(id=sid, title=recording.title, tags=sorted(set(recording.tags)), notes=recording.notes,
+                 revision=recording.sync.revision,
+                 revised_utc_ms=revised if recording.sync.revision != base else m.get("revised_utc_ms", 0))
+        m["files"] = [{**f, "source": f["name"]} for f in m.get("files") or []]
+        return m, path
+    name = _SAFE.sub("_", recording.name).lstrip(".") or "recording"
+    entry = {"name": name, "source": path.name, "sha256": _sha256(path), "size": path.stat().st_size,
+             "media_type": _media_type(recording, path)}
+    if name != recording.name:
+        entry["original_name"] = recording.name
+    m = {
+        "format": "mmp-session", "version": 1, "id": sid, "origin": "mmp-sense",
+        "title": recording.title, "tags": sorted(set(recording.tags)), "notes": recording.notes,
+        "revision": recording.sync.revision, "revised_utc_ms": revised,
+        "started_utc_ns": _utc_ns(recording.started_at_utc),
+        "duration_s": recording.duration_s,
         "device": {"software": "mmp-sense", "version": __version__},
-        "metadata": {"workspace_id": workspace.id, "recording_id": recording.id,
-                     "file_name": recording.name,
-                     **({"live": {k: recording.meta[k] for k in ("node", "relayed_session", "stream")
-                                  if k in recording.meta}} if recording.meta.get("relayed_session") else {})},
+        "workspace": {"id": workspace.id, "recording_id": recording.id},
+        "read_options": recording.options,
+        "files": [entry],
     }
+    if recording.meta:
+        m["meta"] = recording.meta
+    return m, path.parent
 
 
-def _clock(recording: Recording) -> dict:
-    """What the start was taken from: a live fragment's UTC clock, else not known."""
-    clock = recording.meta.get("clock") or {}
-    if not clock.get("source"):
-        return {"source": "unknown"}
-    out = {"source": clock["source"]}
-    if clock.get("uncertainty_ns") is not None:
-        out["uncertainty_ns"] = int(clock["uncertainty_ns"])
-    if clock.get("domain"):
-        out["domain"] = clock["domain"]
-    return out
+_TYPES = {".wav": "audio/wav", ".mcap": "application/x-mcap", ".m4a": "audio/mp4", ".aac": "audio/aac",
+          ".3gp": "audio/3gpp", ".amr": "audio/amr", ".mp3": "audio/mpeg", ".ogg": "audio/ogg",
+          ".opus": "audio/ogg", ".flac": "audio/flac", ".webm": "audio/webm", ".csv": "text/csv",
+          ".tsv": "text/tab-separated-values", ".npy": "application/x-npy", ".npz": "application/x-npz"}
 
 
-def _duration_ns(recording: Recording) -> int:
-    return int(round((recording.duration_s or 0.0) * 1e9))
+def _media_type(recording: Recording, path: Path) -> str:
+    return _TYPES.get(path.suffix.lower(), "text/plain" if recording.kind == "text" else "application/octet-stream")
 
 
-_AUDIO_TYPES = {".m4a": "audio/mp4", ".aac": "audio/aac", ".3gp": "audio/3gpp", ".amr": "audio/amr",
-                ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".opus": "audio/ogg",
-                ".flac": "audio/flac", ".webm": "audio/webm"}
-_TEXT_TYPES = {".csv": "text/csv", ".tsv": "text/tab-separated-values"}
-
-
-def declaration_of(recording: Recording, path: Path) -> dict:
-    """The sample declaration of a recording's one file."""
-    from ..io.audio import SENSOR_RATE_BELOW, wav_format
-
-    suffix = path.suffix.lower()
-    container = suffix.lstrip(".") or "bin"
-    encoding: dict = {"container": container}
-    if recording.kind == "wav":
-        rate, channels = wav_format(path) or (0, 0)
-        sensor = rate < SENSOR_RATE_BELOW or recording.options.get("scale") is not None
-        media_type, modality = "audio/wav", "other" if sensor else "audio"
-        encoding = {"container": "wav", "sample_rate_hz": rate, "channels": channels}
-        meta = recording.meta
-        if meta.get("channel_names") and len(meta["channel_names"]) == channels:
-            encoding["channel_names"] = list(meta["channel_names"])
-        if meta.get("sample_format"):
-            encoding["sample_format"] = meta["sample_format"]
-            if meta.get("valid_bits"):
-                encoding["valid_bits"] = int(meta["valid_bits"])
-    elif recording.kind == "mcap":
-        media_type, modality = "application/x-mcap", "multi"
-        encoding = {"container": "mcap"}
-    elif recording.kind == "audio":
-        media_type, modality = _AUDIO_TYPES.get(suffix, "application/octet-stream"), "audio"
-    elif recording.kind == "array":
-        media_type, modality = f"application/x-{container}", "other"
-    else:
-        media_type, modality = _TEXT_TYPES.get(suffix, "text/plain"), "other"
-    return {
-        "schema_version": 1,
-        "sample_id": recording.sync.sample_id,
-        "capture_session_id": recording.sync.capture_session_id,
-        "sequence_number": 1,
-        "modality": modality,
-        "media_type": media_type,
-        "capture": {"start_offset_ns": 0, "duration_ns": _duration_ns(recording)},
-        "encoding": encoding,
-        "payload": {"bytes": path.stat().st_size, "sha256": _sha256(path)},
-        "complete": True,
-        "metadata": {"file_name": recording.name, "read_options": recording.options},
-    }
+def _utc_ns(text: str) -> int | None:
+    if not text:
+        return None
+    try:
+        when = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.timezone.utc)
+    return int(when.timestamp()) * 1_000_000_000 + when.microsecond * 1000
 
 
 def _sha256(path: Path) -> str:
@@ -275,53 +241,3 @@ def _sha256(path: Path) -> str:
         for block in iter(lambda: file.read(1 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-# -- the token ----------------------------------------------------------------
-
-def credentials_path() -> Path:
-    from ..settings import config_dir
-
-    return config_dir() / "credentials.json"
-
-
-def load_token(server: str) -> str | None:
-    try:
-        tokens = json.loads(credentials_path().read_text())
-    except (OSError, ValueError):
-        return None
-    return tokens.get(server.rstrip("/")) if isinstance(tokens, dict) else None
-
-
-def forget_token(server: str) -> None:
-    """Drop the token kept for `server`, so the next Synchronize asks for one."""
-    try:
-        tokens = json.loads(credentials_path().read_text())
-    except (OSError, ValueError):
-        return
-    if isinstance(tokens, dict) and tokens.pop(server.rstrip("/"), None) is not None:
-        _write_tokens(tokens)
-
-
-def store_token(server: str, token: str) -> None:
-    """Keep `token` for `server`, readable by the user alone."""
-    path = credentials_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        tokens = json.loads(path.read_text())
-        if not isinstance(tokens, dict):
-            tokens = {}
-    except (OSError, ValueError):
-        tokens = {}
-    tokens[server.rstrip("/")] = token
-    _write_tokens(tokens)
-
-
-def _write_tokens(tokens: dict) -> None:
-    path = credentials_path()
-    temporary = path.with_suffix(".tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w") as file:
-        json.dump(tokens, file, indent=2)
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, path)

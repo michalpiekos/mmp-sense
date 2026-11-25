@@ -32,10 +32,12 @@ Whichever of the three changes something, the other two see it.
 
 ```sh
 python3 -m venv .venv
+.venv/bin/pip install -e ../mmp-stream
 .venv/bin/pip install --config-settings editable_mode=compat -e '.[gui,mcp]'
 ```
 
-Python 3.12 or later. The core needs NumPy, SciPy, pandas and mcap; the
+Python 3.12 or later, with the [mmp-stream](../mmp-stream) checkout beside
+this one (`uv run` finds it by itself). The core needs NumPy, SciPy, pandas, mcap and mmp-stream; the
 `gui` extra adds PySide6, pyqtgraph, qtconsole and ipykernel, and the
 `mcp` extra adds the MCP server. A script that only reads signals needs
 neither extra. The commands below assume the environment is active
@@ -51,7 +53,7 @@ mmp-sense table.tsv                         # a column per channel
 mmp-sense capture.npy --rate 400            # an array, with its sample rate
 mmp-sense bench.csv --replay --speed 2      # played back in time, twice as fast
 mmp-sense walk.mcap --topic /sensor/accelerometer --topic /sensor/gyroscope
-mmp-sense export/<session-id>              # a session srv-senselab exported with --raw: mics by name, its clocks
+mmp-sense streams/<session-id>             # a session folder: mics by name, its clocks
 ```
 
 The file is named on its own or with `--file`. Without `--replay` the
@@ -74,36 +76,35 @@ mmp-sense ~/field-day                        # a workspace folder
 In the window, **File → Create workspace** puts the workspace in a
 folder, **Open** adds more files, **Save all** copies them in, and
 **Synchronize** sends them, with their titles, tags and notes, to
-srv-senselab. Set the server once in **Edit → Settings**: its address,
-and the token file of a source made for mmp-sense:
-
-```sh
-docker exec sample sample source create --type import --name "mmp-sense" --token-file /data/out/mmp-sense.token
-```
-
-Copy that file (from `/srv/senselab/out/` on the server) to your
-machine and name it in Settings. **Save workspace as** makes a whole
+srv-senselab. Set the server's address once in **Edit → Settings**
+(`http://192.168.1.2:8080`); there are no credentials. Each recording is
+one session there, and a session folder is sent as the session it is.
+**Save workspace as** makes a whole
 copy to trim or cut down, sent as sessions of its own. The menus and the
 dock are in [docs/window.md](docs/window.md#the-menus-and-the-workspace-dock),
 the folder in [docs/formats.md](docs/formats.md#a-workspace-folder).
 
 ## Watch nodes live
 
-Nodes stream to a srv-senselab gateway: the server's, or
-`senselab-gateway` on a laptop away from it. In the window,
-**File → Open stream** lists what that gateway is relaying; tick one
-or more nodes to watch them. Each stream gets its own chart, and all
-of them share one time axis in UTC, taken from the nodes' clocks.
+Nodes stream to an [mmp-stream](../mmp-stream) receiver: the one on the
+server's host, one on a laptop, or this window itself. In the window,
+**File → Open stream** lists what a receiver is relaying; tick one or
+more nodes to watch them. Each stream gets its own chart, and all of
+them share one time axis in UTC, taken from the nodes' clocks.
 
 ```text
-node ──> gateway ──relay :8091──> mmp-sense: a chart per stream, one UTC axis
-                                     └─ shift-drag, File → Save selection ──> workspace ──> Synchronize
+node ──> receiver ──relay :8091──> mmp-sense: a chart per stream, one UTC axis
+            └─ every stream saved whole          └─ shift-drag, File → Save selection ──> workspace ──> Synchronize
 ```
 
-The relay is the server's host on port 8091 unless **Edit → Settings**
-names another (`127.0.0.1:8091` for a gateway on this laptop). The
-server's relay wants the token Synchronize uses; it is sent only to the
-server's host, or to this machine for an ssh tunnel, never elsewhere. To keep a stretch, select it and choose
+**File → Receive streams** makes this window the receiver: nodes pointed
+at this machine (port 8090) stream here, **Open stream** lists them from
+the window's own relay, and each finished stream is added to the
+workspace whole, as a session folder, to Synchronize like any other
+recording. In the field that is all a laptop needs.
+
+Otherwise the relay is the server's host on port 8091 unless **Edit →
+Settings** names another. To keep a stretch, select it and choose
 **File → Save selection to workspace**: each stream becomes a WAV, the
 node's own samples with their channel names and UTC start. The **Live
 streams** dock shows how each stream is timed, and moves one by hand

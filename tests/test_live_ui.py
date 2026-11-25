@@ -1,4 +1,4 @@
-"""File -> Open stream, the Live streams dock and Save selection, offscreen."""
+"""File -> Open stream, Receive streams, the Live streams dock and Save selection, offscreen."""
 
 from __future__ import annotations
 
@@ -9,8 +9,10 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 
+import mmp_stream                                               # noqa: E402
+from PySide6.QtWidgets import QApplication                      # noqa: E402
 from fake_relay import FakeRelay                                # noqa: E402
-from fake_senselab import TOKEN, FakeSenselab                   # noqa: E402
+from senselab import Senselab                                   # noqa: E402
 from test_streaming import RATE, two_nodes                      # noqa: E402
 from mmp_sense.settings import Settings                         # noqa: E402
 from mmp_sense.ui.main_window import MainWindow                 # noqa: E402
@@ -41,6 +43,7 @@ def until(window, condition, seconds=5.0):
         assert time.monotonic() < end, "timed out"
         window.tick()
         window.live.update()
+        QApplication.processEvents()          # what other threads sent the window
         time.sleep(0.01)
 
 
@@ -63,7 +66,7 @@ def test_open_stream_shows_a_chart_per_stream_and_the_dock(window):
         assert not window.live.live_dock.collapsed
         assert [dock.tree.topLevelItem(i).text(0) for i in range(2)] == names
         assert dock.tree.topLevelItem(0).text(3) == "node ntp ±20 ms"
-        assert dock.tree.topLevelItem(1).text(3) == "gateway arrival ±100 ms"
+        assert dock.tree.topLevelItem(1).text(3) == "receiver arrival ±100 ms"
         assert dock.epoch.text() == "Time 0 is 2026-11-15 08:00:00 UTC"
         assert window.files.shown is None
 
@@ -79,21 +82,63 @@ def test_the_menu_offers_streams_and_cancelling_does_nothing(window):
     texts = [a.text() for a in window.files.menu.actions()]
     assert texts.index("Open s&tream...") == texts.index("&Open...") + 1
     assert texts.index("Save s&election to workspace") == texts.index("Save a&ll") + 1
-    window.live.ask_streams = lambda relay, token_for: None
+    window.live.ask_streams = lambda relay: None
     assert window.live.open_streams() == []
     assert not window.live.live.streams
 
 
-def test_the_relay_and_token_come_from_the_settings(window, tmp_path):
-    token = tmp_path / "relay.token"
-    token.write_text("mmps_relay\n")
-    Settings(server="http://192.168.1.2:8080", token_file=str(token)).save()
+def test_the_relay_comes_from_the_settings(window):
+    Settings(server="http://192.168.1.2:8080").save()
     asked = []
-    window.live.ask_streams = lambda relay, token_for: asked.append(
-        (relay, token_for(relay), token_for("192.168.1.23:8091"), token_for("localhost:18091")))
+    window.live.ask_streams = lambda relay: asked.append(relay)
     window.live.open_streams()
-    assert asked == [("192.168.1.2:8091", "mmps_relay", None, "mmps_relay")], \
-        "the token goes to the server's host, or through a tunnel on this machine, only"
+    assert asked == ["192.168.1.2:8091"], "the server's host by default"
+
+
+def test_receive_streams_watches_and_keeps_each_stream_whole(window, tmp_path):
+    files = window.files
+    files.create_workspace(tmp_path / "ws", "Field day")
+    live = window.live
+    assert live.start_receiving("127.0.0.1:0", "127.0.0.1:0")
+    try:
+        assert live.receive_action.isChecked()
+        relay = live.receiving_relay()
+        assert "Receiving streams on 127.0.0.1:" in live.receiving_label.text()
+        asked = []
+        live.ask_streams = lambda r: asked.append(r)
+        live.open_streams()
+        assert asked == [relay], "the window's own relay while it receives"
+
+        node = f"127.0.0.1:{live.receiver.address[1]}"
+        sid = mmp_stream.send(node, "tetrahedral", "tetra1", seconds=0.5, title="Bench", log=lambda _l: None)
+        until(window, lambda: any(r.sync.session_id == sid for r in files.workspace.recordings))
+        (recording,) = files.workspace.recordings
+        assert recording.saved and recording.origin == "session" and recording.title == "Bench"
+        assert not (tmp_path / "ws" / "received" / sid).exists(), "moved in, not copied"
+        assert (files.workspace.path_of(recording) / "mics.wav").is_file()
+
+        with Senselab(tmp_path / "srv") as server:
+            files.synchronize(server.url, wait=True)
+            assert [r.outcome for r in files.last_results] == ["sent"]
+            assert server.manifest(sid)["title"] == "Bench"
+            assert server.store.session(sid)["missing"] == []
+    finally:
+        live.stop_receiving()
+    assert not live.receive_action.isChecked() and live.receiving_label.text() == ""
+
+
+def test_receiving_on_a_port_in_use_is_told(window):
+    import socket
+
+    busy = socket.socket()
+    busy.bind(("127.0.0.1", 0))
+    busy.listen()
+    try:
+        assert not window.live.start_receiving(f"127.0.0.1:{busy.getsockname()[1]}", "127.0.0.1:0")
+        assert window.files.told[-1][2] and "Cannot receive" in window.files.told[-1][1]
+        assert not window.live.receive_action.isChecked()
+    finally:
+        busy.close()
 
 
 def test_a_selection_is_kept_in_the_workspace_and_synchronized(window, tmp_path):
@@ -111,19 +156,18 @@ def test_a_selection_is_kept_in_the_workspace_and_synchronized(window, tmp_path)
         files = window.files
         files.create_workspace(tmp_path / "ws", "Field day")
         files.save_all()
-        with FakeSenselab() as fake:
-            files.synchronize(fake.url, TOKEN, wait=True)
+        with Senselab(tmp_path / "srv") as server:
+            files.synchronize(server.url, wait=True)
             assert [r.outcome for r in files.last_results] == ["sent", "sent"]
             first = added[0]
-            declared = fake.samples[first.sync.sample_id]["declaration"]
-            assert declared["encoding"]["channel_names"] == ["S", "N", "W", "E"]
-            assert declared["encoding"]["sample_format"] == "s16"
-            session = fake.sessions[first.sync.capture_session_id]
-            assert session["clock"] == {"source": "ntp", "uncertainty_ns": 20_000_000}
-            assert session["started_at_utc"] == first.started_at_utc
-            assert session["metadata"]["live"]["stream"] == "mics"
-            assert fake.sessions[added[1].sync.capture_session_id]["clock"] == {
-                "source": "ntp", "uncertainty_ns": 100_000_000, "domain": "ntp:stream-gateway"}
+            m = server.manifest(first.sync.session_id)
+            assert m["meta"]["channel_names"] == ["S", "N", "W", "E"]
+            assert m["meta"]["sample_format"] == "s16"
+            assert m["meta"]["clock"]["source"] == "ntp" and m["meta"]["clock"]["uncertainty_ns"] == 20_000_000
+            assert m["meta"]["stream"] == "mics"
+            assert m["started_utc_ns"] // 10_000_000 == 179_472_960_050
+            clock = server.manifest(added[1].sync.session_id)["meta"]["clock"]
+            assert (clock["from"], clock["uncertainty_ns"], clock["domain"]) == ("receiver", 100_000_000, "ntp:mmp-stream-receiver")
 
         # Showing a recording leaves the live view, and the fragment has its channels' names.
         files.dock.list.setCurrentRow(0)

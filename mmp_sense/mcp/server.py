@@ -142,7 +142,7 @@ def build_server(backend, name: str = "mmp-sense"):
 
     def get_clock_observations(clock: str | None = None, limit: int = 1000) -> dict:
         """The recording's clock readings, raw, a row per reading: time (session s),
-        kind, clock, value (its ticks), uncertainty_ns, pps and the gateway's UTC."""
+        kind, clock, value (its ticks), uncertainty_ns, pps and the receiver's UTC."""
         return backend.call("get_clock_observations", {"clock": clock, "limit": limit})
 
     for function in (get_current_context, list_signals, get_statistics, get_values,

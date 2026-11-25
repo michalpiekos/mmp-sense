@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mmp-sense"
-version = "0.1.0"
+version = "0.4.0"
 description = "Explore sensor signals: look at them, measure them, turn what you see into a detector"
 readme = "README.md"
 license = "MIT"
@@ -15,6 +15,7 @@ dependencies = [
     "scipy>=1.11",
     "pandas>=2.1",
     "mcap>=1.2,<2",
+    "mmp-stream>=0.4",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +38,9 @@ include = ["mmp_sense*"]
 
 [tool.setuptools.package-data]
 mmp_sense = ["py.typed"]
+
+[tool.uv.sources]
+mmp-stream = { path = "../mmp-stream", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

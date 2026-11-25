@@ -32,29 +32,27 @@ open as they are:
   counts -- as a sensor's, in counts, or in units with the sample's
   `encoding.scale`:
   `mmp-sense accel.wav --scale 0.0023942 --units m/s^2`.
-- **Its clip-export CSVs**: `t_ns,x,y,z` in seconds and in the stream's
-  unit, read from the file's name (`..._accelerometer_...` is m/s²), and
-  the GNSS table with its gaps kept.
 
-- **A session folder of a raw export**: `sample export "<sql>" --out DIR --raw`
-  writes `DIR/manifest.json` and a folder per session; open the session's
-  folder, `mmp-sense DIR/<session-id>`.
+- **A session folder**, as an [mmp-stream](../../mmp-stream) receiver
+  writes each stream and `srv.py export` writes each session: a folder
+  holding `session.json` (`format: "mmp-session"`); open the folder,
+  `mmp-sense streams/<session-id>`.
   - Each WAV stream becomes a stream named after it (`mics`), with its
-    channels' names: tetrahedral's mics are `S`, `N`, `W` and `E` (written
-    `mics:S` ... when the session has several streams). Sound is from -1
-    to 1; a sensor's counts times its `encoding.scale`.
-  - Time is the session's, in seconds from its start: each frame where its
-    `/audio/timing` point puts it, so frames lost in transit stay a gap in
-    time, at the right time. Frames between two points are spread evenly
-    from one to the next, so a node whose points jitter by a few ms never
-    steps back in time. The MCAP's plottable topics (GNSS,
-    sensors) join as streams of their own.
-  - The declared clocks and every `/clock/observation` reading come along:
-    `session.clocks()` and `session.clock_observations()` ([the API](API.md#recorded-clocks)).
-  - The folder needs the export's `manifest.json` beside it. Video samples
-    are not read.
-
-Other export manifests and annotation files are not read.
+    channels' names from `session.json`'s `streams`: tetrahedral's mics are
+    `S`, `N`, `W` and `E` (written `mics:S` ... when the session has several
+    streams). Sound is from -1 to 1; a sensor's counts times each channel's
+    `scale`, in its `unit`. A stream continued past 4 GiB (`mics-001.wav`
+    ...) reads as one.
+  - Time is the session's, in seconds from its start: each frame where the
+    `audio` timing points of `timing.jsonl` put it, so frames lost in transit
+    stay a gap in time, at the right time. Frames between two points are
+    spread evenly from one to the next, so a node whose points jitter by a
+    few ms never steps back in time. A phone's MCAP files join with their
+    plottable topics (GNSS, sensors) as streams of their own.
+  - The declared clocks and every clock observation of `timing.jsonl` come
+    along: `session.clocks()` and `session.clock_observations()`
+    ([the API](API.md#recorded-clocks)). The title, tags and notes become
+    the recording's. Video is not read.
 
 ## A workspace folder
 
@@ -71,9 +69,9 @@ the workspace's `id`, `title` and `notes`, the `server` it was sent to,
 and a `recordings` list. Each recording has its `id`, file `name` and
 `kind`, `title`, `tags`, `notes`, `started_at_utc`, `duration_s`, the
 read `options` (topics, rate, scale, units), `origin` (`file`, or
-`server` for a srv-senselab export) and its `sync` state with the
-server: the capture session and sample identities, what was declared,
-uploaded and closed, and the context revision sent. No token is ever
-written there. A srv-senselab export is kept with its `manifest.json`
-beside it.
+`session` for a session folder) and its `sync` state with the server:
+the `session_id` it is there, the manifest `revision` sent, and the
+title, tags and notes the server holds (`context_sent`). A session
+folder is kept whole; one File → Receive streams saved is moved in from
+the workspace's `received/`.
 

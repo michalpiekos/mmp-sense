@@ -1141,7 +1141,7 @@ class Session:
         return None
 
     def clocks(self) -> pd.DataFrame:
-        """The clocks the recording declared (a session exported by srv-senselab): id,
+        """The clocks the recording declared (a session folder): id,
         name, kind, hz, bits, whether it is the timeline, source and domain. Empty for
         other files."""
         clocks = self._recorded("clocks") or []
@@ -1151,7 +1151,7 @@ class Session:
     def clock_observations(self) -> pd.DataFrame:
         """Every clock reading the recording holds, raw: `time` (session s), `kind`
         (device, pong, arrival), `clock`, `value` (that clock's ticks), `uncertainty_ns`,
-        and `pps` and the gateway's UTC fields where the observation has them."""
+        and `pps` and the receiver's UTC fields where the observation has them."""
         table = self._recorded("clock_observations")
         if table is None:
             return pd.DataFrame(columns=["time", "kind", "clock", "value", "uncertainty_ns"])
